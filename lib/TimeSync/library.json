@@ -1,0 +1,5 @@
+{
+  "name": "TimeSync",
+  "version": "1.0.0",
+  "description": "Time sync via serial SETTIME command, with compile-time fallback"
+}

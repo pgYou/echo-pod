@@ -1,0 +1,9 @@
+{
+  "name": "WavRecorder",
+  "version": "1.0.0",
+  "description": "Recording-pod orchestrator: PDM mic + VadTrigger + RingBuffer + SD + WAV",
+  "dependencies": {
+    "VadTrigger": "*",
+    "RingBuffer": "*"
+  }
+}

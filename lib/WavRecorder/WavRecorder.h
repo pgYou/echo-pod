@@ -1,0 +1,124 @@
+#pragma once
+#include <Arduino.h>
+#include <ESP_I2S.h>
+#include <SD.h>
+#include <SPI.h>
+#include "VadTrigger.h"
+#include "RingBuffer.h"
+
+/**
+ * WavRecorder — 录音豆核心录音器（编排者）
+ * ============================================================
+ * 职责
+ *   组合 PDM 麦采集 + VadTrigger + RingBuffer + SD 卡 + WAV 封装，编排完整
+ *   "自动检测人声 → 预录不丢首音 → 写 WAV 到 SD"流程。
+ *   自身不含判定算法（在 VadTrigger）和缓冲算法（在 RingBuffer），是这两者
+ *   的使用者 + SD/I2S/WAV 的封装者。
+ *
+ * 状态机
+ *   IDLE      持续读麦 → 喂 RingBuffer（预录）+ VadTrigger 判定
+ *        ↓ VadTrigger 转 ACTIVE（score 上穿 HIGH）
+ *   RECORDING 新建 WAV → 先 flush RingBuffer（预录引子）→ 持续写 PCM
+ *        ↓ VadTrigger 回 IDLE（score 跌破 LOW + hangover）或达时长上限
+ *   回 IDLE  finalize WAV（回填 size）→ 关文件 → 继续监听
+ *
+ * 设计要点
+ *   - 回调解耦：状态变化 / 错误通知通过回调上报，不硬绑 Serial 打印
+ *   - 时间来源不绑死：用 time() 读 RTC，RTC 设置交给上层（main.cpp 或未来
+ *     的"时间纠正模块"），本模块只读不设。接入新时间源时替换 time() 即可
+ *   - 引脚 / 路径 / 时长全配置化（HardwareConfig 结构体）
+ *   - 帧大小自动对齐 VADNet 要求（sampleRate/1000 * frameMs）
+ *
+ * 已知简化（待后续模块补）
+ *   - 时间用编译时间设 RTC（main.cpp），不准，待接 NTP / 串口设时模块
+ *   - 无电源管理（功耗模式、低电量处理），待补
+ *   - 无 USB-MSC 同步模式，待补
+ */
+class WavRecorder {
+public:
+  enum class State : uint8_t {
+    IDLE = 0,
+    RECORDING = 1,
+  };
+
+  // 状态变化回调（IDLE ↔ RECORDING）
+  typedef void (*StateCallback)(State state);
+  // 错误回调（非致命：留在/回到 IDLE 继续监听；致命：调用方决定重启）
+  typedef void (*ErrorCallback)(const char *msg);
+
+  // 硬件 / 路径 / 时长配置
+  struct HardwareConfig {
+    // PDM 麦（XIAO ESP32-S3 Sense 扩展板 MSA261，探针实证 CLK=42 DATA=41）
+    int pdmClkPin = 42;
+    int pdmDataPin = 41;
+    // SD 卡（SPI，CS=GPIO21 探针实证 — 一脚两用 USER_LED，访问时橙灯闪）
+    int sdCsPin = 21;
+    int sdSckPin = 7;
+    int sdMisoPin = 8;
+    int sdMosiPin = 9;
+    // 音频（VADNet 要求 16kHz）
+    int sampleRate = 16000;
+    // SD 卡文件组织：外层目录（日期子目录在其下自动建）
+    const char *recordDir = "/echo-pod";
+    // 预录缓冲容量（字节）。32KB ≈ 1 秒（16k mono 16bit）
+    size_t ringBytes = 32 * 1024;
+    // 单段最长录音（防异常长录占用）。0 = 不限
+    uint32_t maxRecordMs = 300000; // 默认 5 分钟
+    // 录音短于此则删除文件（误触发 / SD 写入异常产生的垃圾文件，避免污染 SD
+    // 和后续转写）。含预录缓冲字节，正常录音不会低于此
+    size_t minRecordBytes = 16 * 1024; // 16KB ≈ 0.5s
+  };
+
+  WavRecorder() = default;
+  ~WavRecorder();
+
+  // 初始化全部（I2S 麦 + SD + VadTrigger + RingBuffer）。任一失败返回 false。
+  // 不用默认参数（结构体默认构造在类内触发 NSDMI 完整性问题），调用方显式传。
+  bool begin(const HardwareConfig &hw, const VadTrigger::Params &vad);
+  void end();
+
+  // 主循环步进。在 Arduino loop() 里反复调用，非阻塞。
+  void step();
+
+  // ---- 回调 ----
+  void onStateChange(StateCallback cb) { stateCb_ = cb; }
+  void onError(ErrorCallback cb) { errorCb_ = cb; }
+
+  // ---- 观测（调试 / 上层展示）----
+  State getState() const { return state_; }
+  uint32_t getRecordMs() const { return recordMs_; }
+  uint32_t getDataBytes() const { return dataBytes_; }
+  float getVadScore() const { return vad_.getScore(); }
+  uint32_t getVadLowMs() const { return vad_.getLowMs(); }
+  const VadTrigger::Params &getVadParams() const { return vad_.getParams(); }
+  const char *getCurrentPath() const { return currentPath_.c_str(); }
+
+private:
+  I2SClass i2s_;
+  VadTrigger vad_;
+  RingBuffer ring_;
+  HardwareConfig hw_;
+  State state_ = State::IDLE;
+  bool begun_ = false;
+
+  File wavFile_;
+  uint32_t dataBytes_ = 0; // 当前文件已写 PCM 字节
+  uint32_t recordMs_ = 0;  // 当前已录时长（ms）
+  String currentPath_;
+
+  StateCallback stateCb_ = nullptr;
+  ErrorCallback errorCb_ = nullptr;
+
+  int frameSamples_ = 0;   // 每帧样本数（= sampleRate/1000*frameMs）
+  int frameBytes_ = 0;     // 每帧字节数（= frameSamples*2）
+  int16_t *frameBuf_ = nullptr;
+  int writeFailCount_ = 0; // 连续写入失败计数（容忍偶发，累计才停）
+
+  void notifyState(State s);
+  void notifyError(const char *msg);
+  void startRecording();
+  void stopRecording();
+  void buildPath(String &folder, String &fname);
+  void writeWavHeader();
+  void finalizeWav();
+};

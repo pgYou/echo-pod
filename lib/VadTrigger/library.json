@@ -1,0 +1,5 @@
+{
+  "name": "VadTrigger",
+  "version": "1.0.0",
+  "description": "VADNet neural VAD + envelope integrator + dual-threshold hysteresis trigger for recording-pod"
+}
