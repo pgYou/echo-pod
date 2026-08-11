@@ -40,8 +40,8 @@ void setup() {
 // --- 演示分段：每段串口先打印再执行，便于对照观察 ---
 
 static void demoWhite() {
-  Serial.println("[1/4] 白光常亮 3s");
-  ledcWrite(WHITE_PIN, 255);
+  Serial.println("[1/4] 白光常亮 duty=20（产品默认亮度）3s");
+  ledcWrite(WHITE_PIN, 20);
   ledcWrite(RED_PIN, 0);
   delay(3000);
   Serial.println("      白光灭 1s");
