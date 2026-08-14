@@ -13,8 +13,8 @@
  * 当前状态：阶段2 B1 焊接前（本文件 = 阶段1 基线，保证 echo-pod 立即可跑）
  */
 
-#include "WavRecorder.h"
 #include "TimeSync.h"
+#include "WavRecorder.h"
 #include "config.h" // 硬件 + VAD 参数配置（改参数只动 config.h）
 #include <Arduino.h>
 #include <time.h>

@@ -1,13 +1,13 @@
 # echo-pod
 
-录音豆硬件项目的**阶段2 正式工程**。继承阶段1 验证项目 [`recording-pod-hello`](../recording-pod-hello/) 已跑通的核心录音链路（WavRecorder + VadTrigger + RingBuffer + TimeSync），在阶段2 加入人机交互（LED / 按键 / 电池 / 充电）与可穿戴形态。
+录音豆硬件项目的**阶段2 正式工程**。继承阶段1 验证项目 [`recording-pod-hello`](https://github.com/pgYou/deep-dive/tree/main/projects/recording-pod-hardware/archive/xiao-route/code/recording-pod-hello) 已跑通的核心录音链路（WavRecorder + VadTrigger + RingBuffer + TimeSync），在阶段2 加入人机交互（LED / 按键 / 电池 / 充电）与可穿戴形态。
 
 > 本工程是独立 git 仓库，作为 submodule 嵌入 [deep-dive](https://github.com/pgYou/deep-dive) 学习项目。
 > 完整上下文（决策历程、硬件选型、焊接指南等）在 deep-dive 仓库中：
 > - [项目 Journey](https://github.com/pgYou/deep-dive/blob/main/projects/recording-pod-hardware/Journey.md)
-> - [阶段2 执行计划](https://github.com/pgYou/deep-dive/blob/main/projects/recording-pod-hardware/stage2-execution-plan.md)
-> - [阶段2 固件设计](https://github.com/pgYou/deep-dive/blob/main/projects/recording-pod-hardware/stage2-firmware-design.md)
-> - [焊接指南](https://github.com/pgYou/deep-dive/blob/main/projects/recording-pod-hardware/wiring-guide.md)
+> - [阶段2 执行计划](https://github.com/pgYou/deep-dive/blob/main/projects/recording-pod-hardware/archive/xiao-route/stage2-execution-plan.md)
+> - [阶段2 固件设计](https://github.com/pgYou/deep-dive/blob/main/projects/recording-pod-hardware/archive/xiao-route/stage2-firmware-design.md)
+> - [焊接指南](https://github.com/pgYou/deep-dive/blob/main/projects/recording-pod-hardware/archive/xiao-route/wiring-guide.md)
 
 ## 硬件
 
