@@ -1,0 +1,194 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:is(.dark *));
+
+/* ============================================================
+   Echo Pod 设计令牌（Tailwind v4 CSS-first）
+   基础 = 中性灰（shadcn neutral），主题橙仅作为品牌强调色
+   （brand / page-glow），常规元素（按钮/高亮/边框）均为中性灰
+   ============================================================ */
+
+:root {
+  --radius: 0.625rem;
+
+  /* 基础面：中性灰 */
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+
+  /* 主色：中性深灰（按钮等常规元素） */
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+
+  --destructive: oklch(0.577 0.245 27.325);
+  --destructive-foreground: oklch(0.985 0 0);
+
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.708 0 0);
+
+  /* 状态语义色（徽章用，非主题色） */
+  --success: oklch(0.627 0.17 149.2);
+  --success-foreground: oklch(0.985 0 0);
+  --warning: oklch(0.769 0.188 70.08);
+  --warning-foreground: oklch(0.27 0.05 50);
+
+  /* 品牌橙（仅强调场景使用：品牌渐变 / 页面暖光 / 刻意的点缀） */
+  --brand: oklch(0.646 0.222 41.116);
+  /* orange-600 */
+  --brand-strong: oklch(0.705 0.213 47.604);
+  /* orange-500 */
+  --brand-soft: oklch(0.962 0.024 70);
+  /* 浅橙染色 */
+  --brand-from: oklch(0.705 0.213 47.604);
+  /* orange-500 */
+  --brand-via: oklch(0.752 0.193 55);
+  /* orange-400 */
+  --brand-to: oklch(0.828 0.189 84.429);
+  /* amber-400  */
+
+  /* 图表色（预留，1 号位用品牌橙） */
+  --chart-1: oklch(0.646 0.222 41.116);
+  --chart-2: oklch(0.556 0 0);
+  --chart-3: oklch(0.627 0.17 149.2);
+  --chart-4: oklch(0.606 0.25 292.717);
+  --chart-5: oklch(0.645 0.246 16.439);
+}
+
+.dark {
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+
+  --primary: oklch(0.922 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+
+  --destructive: oklch(0.704 0.191 22.216);
+  --destructive-foreground: oklch(0.985 0 0);
+
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.556 0 0);
+
+  --success: oklch(0.696 0.17 149.2);
+  --success-foreground: oklch(0.985 0 0);
+  --warning: oklch(0.828 0.189 84.429);
+  --warning-foreground: oklch(0.27 0.05 50);
+
+  --brand: oklch(0.705 0.213 47.604);
+  --brand-strong: oklch(0.752 0.193 55);
+  --brand-soft: oklch(0.32 0.03 55);
+  --brand-from: oklch(0.705 0.213 47.604);
+  --brand-via: oklch(0.752 0.193 55);
+  --brand-to: oklch(0.828 0.189 84.429);
+
+  --chart-1: oklch(0.705 0.213 47.604);
+  --chart-2: oklch(0.708 0 0);
+  --chart-3: oklch(0.696 0.17 149.2);
+  --chart-4: oklch(0.702 0.183 293.541);
+  --chart-5: oklch(0.741 0.184 19.604);
+}
+
+/* 映射为 Tailwind 工具类颜色（bg-primary / text-muted-foreground / text-brand / …） */
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-brand: var(--brand);
+  --color-brand-strong: var(--brand-strong);
+  --color-brand-soft: var(--brand-soft);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family:
+      -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB",
+      "Microsoft YaHei", sans-serif;
+  }
+}
+
+/* sonner 容器默认固定 356px 宽（--width）并按屏幕中线居中；胶囊 fit-content 时默认
+   贴容器左侧导致视觉偏移 —— 让胶囊在容器内水平居中即可真正屏幕居中 */
+[data-sonner-toaster] {
+  display: flex;
+  flex-flow: column;
+  align-items: center;
+}
+
+/* 品牌渐变（强调场景专用） */
+@utility bg-brand-gradient {
+  background-image: linear-gradient(135deg,
+      var(--brand-from),
+      var(--brand-via) 50%,
+      var(--brand-to));
+}
+
+/* 页面顶部暖光：浅橙 → 背景，320px 淡出（全宽） */
+@utility bg-page-glow {
+  background-image: linear-gradient(to bottom,
+      var(--brand-soft),
+      var(--background) 320px);
+}

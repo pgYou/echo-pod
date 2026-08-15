@@ -1,0 +1,25 @@
+appId: com.pgyou.echopod
+productName: Echo Pod
+directories:
+  output: dist
+  buildResources: build
+icon: build/icon.png
+files:
+  - out/**
+  - package.json
+asarUnpack:
+  - node_modules/sherpa-onnx-**
+extraResources:
+  - from: models/sense-voice-int8
+    to: models/sense-voice-int8
+  - from: models/diarization
+    to: models/diarization
+mac:
+  icon: build/icon.icns
+  target:
+    - target: dmg
+      arch: [arm64]
+  category: public.app-category.productivity
+  identity: null # 不签名（个人项目）
+electronDownload:
+  mirror: https://npmmirror.com/mirrors/electron/

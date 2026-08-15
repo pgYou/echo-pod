@@ -1,0 +1,17 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="brand" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f97316"/>
+      <stop offset="100%" stop-color="#fbbf24"/>
+    </linearGradient>
+  </defs>
+  <!-- 无边版：透明底 + 橙色渐变音量条（AudioLines 同款几何，24 网格放大至 640px，四周留白 192px） -->
+  <g fill="url(#brand)">
+    <rect x="219" y="472" width="53" height="80"  rx="26"/>
+    <rect x="326" y="366" width="53" height="293" rx="26"/>
+    <rect x="433" y="272" width="53" height="480" rx="26"/>
+    <rect x="539" y="419" width="53" height="187" rx="26"/>
+    <rect x="646" y="339" width="53" height="347" rx="26"/>
+    <rect x="753" y="472" width="53" height="80"  rx="26"/>
+  </g>
+</svg>
