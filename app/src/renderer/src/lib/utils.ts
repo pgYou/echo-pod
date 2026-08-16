@@ -22,3 +22,7 @@ export function formatDateTime(iso: string): string {
   const d = new Date(iso)
   return `${d.toLocaleDateString('zh-CN')} ${d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`
 }
+
+export function formatDate(iso: string): string {
+  return new Date(iso).toLocaleDateString("zh-CN")
+}

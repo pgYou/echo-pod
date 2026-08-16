@@ -43,6 +43,8 @@ declare module 'sherpa-onnx-node' {
   /** enableExternalBuffer=false 时内部拷贝样本；Electron(Node 24+) 必须传 false */
   export function readWave(filename: string, enableExternalBuffer?: boolean): WaveObject
 
+  export function writeWave(filename: string, obj: { samples: Float32Array; sampleRate: number }): boolean
+
   export interface OfflineSpeakerSegment {
     start: number
     end: number

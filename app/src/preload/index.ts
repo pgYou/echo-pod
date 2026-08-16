@@ -17,7 +17,27 @@ const api = {
   deleteRecordings: (serial: string, ids: string[]): Promise<number> =>
     ipcRenderer.invoke('app:delete-recordings', serial, ids),
   // 清理设备上已同步文件
-  cleanDevice: (serial: string): Promise<number> => ipcRenderer.invoke('app:clean-device', serial)
+  cleanDevice: (serial: string): Promise<number> => ipcRenderer.invoke('app:clean-device', serial),
+  // 声纹
+  renameVoiceprint: (serial: string, id: string, name: string): Promise<boolean> =>
+    ipcRenderer.invoke('app:rename-voiceprint', serial, id, name),
+  retranscribe: (serial: string): Promise<number> => ipcRenderer.invoke('app:retranscribe', serial),
+  deleteVoiceprint: (serial: string, id: string): Promise<boolean> =>
+    ipcRenderer.invoke('app:delete-voiceprint', serial, id),
+  stopTranscribe: (): Promise<boolean> => ipcRenderer.invoke('app:stop-transcribe'),
+  resumeTranscribe: (serial: string): Promise<number> => ipcRenderer.invoke('app:resume-transcribe', serial),
+  transcribeOne: (serial: string, id: string): Promise<boolean> =>
+    ipcRenderer.invoke('app:transcribe-one', serial, id),
+  transcribeSelected: (serial: string, ids: string[]): Promise<number> =>
+    ipcRenderer.invoke('app:transcribe-selected', serial, ids),
+  /** 大同步量预览：同步完成后主进程推送，渲染层弹选择框 */
+  onSyncBatchPreview: (
+    callback: (batch: { serial: string; items: { id: string; fileName: string; day: string; durationSec?: number; size: number }[]; estimatedSec: number }) => void
+  ): (() => void) => {
+    const listener = (_e: Electron.IpcRendererEvent, batch: Parameters<typeof callback>[0]): void => callback(batch)
+    ipcRenderer.on('sync-batch-preview', listener)
+    return () => ipcRenderer.removeListener('sync-batch-preview', listener)
+  }
 }
 
 export type EchoPodApi = typeof api

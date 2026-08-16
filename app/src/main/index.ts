@@ -23,9 +23,11 @@ function createWindow(): void {
     height: 720,
     minWidth: 860,
     minHeight: 560,
-    title: 'Echo Pod',
+    title: 'Echo回响',
     show: !isE2E,
     autoHideMenuBar: true,
+    // 隐藏系统标题栏（mac 保留红绿灯浮层），标题栏由渲染层自绘（TitleBar 组件）
+    titleBarStyle: 'hidden',
     icon: fs.existsSync(iconPath) ? iconPath : undefined,
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),

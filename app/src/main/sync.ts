@@ -1,6 +1,7 @@
 // 同步：把设备上的新 WAV 拷贝进本地库（按设备 serial 隔离）
 import fs from 'node:fs'
 import path from 'node:path'
+import { BrowserWindow } from 'electron'
 import type { RecordingMeta } from '../shared/types'
 import { scanDeviceFiles } from './devices'
 import {
@@ -65,7 +66,26 @@ export async function syncDevice(serial: string): Promise<number> {
     emitState()
   }
 
-  // 同步完成 → 自动开始转写（仅已成功落库的文件）
-  enqueueTranscribe(synced)
+  // 同步完成 → 自动转写。量大时（预估超 10 分钟）先推送预览，由用户勾选后转写
+  const EST_SEC_PER_AUDIO_SEC = 0.15 // 实测定标：57s 音频全管线约 8s（≈0.14）+ 每文件开销
+  const estimatedSec = synced.reduce((sum, r) => sum + (r.durationSec ?? 60) * EST_SEC_PER_AUDIO_SEC, 0)
+  if (estimatedSec > 600) {
+    for (const win of BrowserWindow.getAllWindows()) {
+      win.webContents.send('sync-batch-preview', {
+        serial,
+        estimatedSec: Math.round(estimatedSec),
+        items: synced.map((r) => ({
+          id: r.id,
+          fileName: r.fileName,
+          day: r.relPath.split('/')[1] ?? '',
+          durationSec: r.durationSec,
+          size: r.size
+        }))
+      })
+    }
+    // 未勾选/未确认的部分保持 pending，可从设备卡「继续转写」恢复
+  } else {
+    enqueueTranscribe(synced)
+  }
   return synced.length
 }

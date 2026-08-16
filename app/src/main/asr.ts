@@ -51,6 +51,11 @@ const sherpa = nodeRequire('sherpa-onnx-node')
 const MODELS = workerData.modelsRoot
 let recognizer = null
 let diarizer = null
+let embedder = null
+// 同人判定阈值。实测定标（tools/test-embedding.mjs，4说话人官方测试音频）：
+// 同人跨段 cosine 0.46~0.73，异人 -0.06~0.24 → 取 0.40
+// （此前误用聚类距离惯例值 0.85，导致匹配全失配、声纹爆炸注册）
+const VOICE_MATCH_THRESHOLD = 0.40
 
 function getRecognizer() {
   if (recognizer) return recognizer
@@ -88,6 +93,39 @@ function getDiarizer() {
   return diarizer
 }
 
+function getEmbedder() {
+  if (embedder) return embedder
+  embedder = new sherpa.SpeakerEmbeddingExtractor({
+    model: path.join(MODELS, 'diarization', '3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx'),
+    numThreads: 2
+  })
+  return embedder
+}
+
+function extractEmbedding(samples) {
+  const ex = getEmbedder()
+  const stream = ex.createStream()
+  stream.acceptWaveform({ sampleRate: 16000, samples })
+  let emb = null
+  // compute 逐块计算并返回 embedding（最终一次有效）；false = 禁用 external buffer（Electron Node 24）
+  while (ex.isReady(stream)) {
+    emb = ex.compute(stream, false)
+  }
+  if (!emb) emb = ex.compute(stream, false)
+  return emb
+}
+
+function cosine(a, b) {
+  let dot = 0, na = 0, nb = 0
+  const n = Math.min(a.length, b.length)
+  for (let i = 0; i < n; i++) {
+    dot += a[i] * b[i]
+    na += a[i] * a[i]
+    nb += b[i] * b[i]
+  }
+  return dot / (Math.sqrt(na) * Math.sqrt(nb) + 1e-12)
+}
+
 function decode(samples) {
   const r = getRecognizer()
   const stream = r.createStream()
@@ -96,26 +134,68 @@ function decode(samples) {
   return r.getResult(stream).text
 }
 
-function transcribe(file) {
+function transcribe(file, registry) {
   const wave = sherpa.readWave(file, false)
   const haveDiar = fs.existsSync(path.join(MODELS, 'diarization', 'sherpa-onnx-pyannote-segmentation-3-0', 'model.int8.onnx')) &&
     fs.existsSync(path.join(MODELS, 'diarization', '3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx'))
-  if (!haveDiar) return decode(wave.samples).trim()
+  if (!haveDiar) return { text: decode(wave.samples).trim(), speakers: [] }
   const segments = getDiarizer().process(wave.samples)
+
+  // 每个聚类取最长段做代表：提 embedding 与声纹库匹配（新声音自动注册）
+  const longest = new Map()
+  for (const seg of segments) {
+    const dur = seg.end - seg.start
+    if (!longest.has(seg.speaker) || dur > longest.get(seg.speaker).end - longest.get(seg.speaker).start) {
+      longest.set(seg.speaker, seg)
+    }
+  }
+  const speakers = []
+  const sr = wave.sampleRate
+  for (const [spk, seg] of longest) {
+    let s = Math.round(seg.start * sr)
+    let e = Math.round(seg.end * sr)
+    if (e - s > 12 * sr) e = s + 12 * sr // 代表段上限 12s
+    const emb = extractEmbedding(wave.samples.subarray(s, e))
+    let voiceprintId = null
+    let best = -1
+    for (const v of registry || []) {
+      const sim = cosine(emb, v.embedding)
+      if (sim > best) { best = sim; voiceprintId = v.id }
+    }
+    if (best < VOICE_MATCH_THRESHOLD) voiceprintId = null
+    // demo 截段：最长段前 10s
+    let ds = Math.round(seg.start * sr)
+    let de = Math.round(seg.end * sr)
+    if (de - ds > 10 * sr) de = ds + 10 * sr
+    speakers.push({
+      cluster: spk,
+      voiceprintId,
+      newVoiceprint: voiceprintId ? null : {
+        embedding: Array.from(emb),
+        demoSamples: wave.samples.slice(ds, de),
+        sampleRate: sr
+      }
+    })
+  }
+
   const lines = []
   for (const seg of segments) {
     const start = Math.round(seg.start * wave.sampleRate)
     const end = Math.round(seg.end * wave.sampleRate)
     const text = decode(wave.samples.subarray(start, end)).trim()
-    if (text) lines.push('[说话人 ' + (seg.speaker + 1) + '] ' + text)
+    if (text) lines.push('[[spk' + seg.speaker + ']] ' + text)
   }
-  return lines.length > 0 ? lines.join('\\n') : decode(wave.samples).trim()
+  return {
+    text: lines.length > 0 ? lines.join('\\n') : decode(wave.samples).trim(),
+    speakers
+  }
 }
 
 parentPort.on('message', (m) => {
   if (m.type !== 'transcribe') return
   try {
-    parentPort.postMessage({ id: m.id, ok: true, text: transcribe(m.file) })
+    const result = transcribe(m.file, m.registry || [])
+    parentPort.postMessage({ id: m.id, ok: true, result })
   } catch (e) {
     parentPort.postMessage({ id: m.id, ok: false, error: String((e && e.message) || e) })
   }
@@ -123,11 +203,23 @@ parentPort.on('message', (m) => {
 parentPort.postMessage({ type: 'ready' })
 `
 
+/** 转写结果：文本 + 声纹匹配信息（用于主进程注册/更新声纹库） */
+export interface SpeakerMatch {
+  cluster: number
+  voiceprintId: string | null
+  newVoiceprint: { embedding: number[]; demoSamples: Float32Array; sampleRate: number } | null
+}
+
+export interface TranscribeResult {
+  text: string
+  speakers: SpeakerMatch[]
+}
+
 let worker: Worker | null = null
 let workerFailed = false
 let readyPromise: Promise<boolean> | null = null
 let seq = 0
-const pending = new Map<number, { resolve: (text: string) => void; reject: (err: Error) => void }>()
+const pending = new Map<number, { resolve: (r: TranscribeResult) => void; reject: (err: Error) => void }>()
 
 function startWorker(): Promise<boolean> {
   if (readyPromise) return readyPromise
@@ -150,18 +242,27 @@ function startWorker(): Promise<boolean> {
         resolve(false)
       }, 60_000)
 
-      w.on('message', (m: { type?: string; id?: number; ok?: boolean; text?: string; error?: string }) => {
-        if (m.type === 'ready') {
-          clearTimeout(timeout)
-          worker = w
-          resolve(true)
-        } else if (m.id != null && pending.has(m.id)) {
-          const p = pending.get(m.id)!
-          pending.delete(m.id)
-          if (m.ok) p.resolve(m.text ?? '')
-          else p.reject(new Error(m.error ?? 'transcribe failed'))
+      w.on(
+        'message',
+        (m: {
+          type?: string
+          id?: number
+          ok?: boolean
+          result?: TranscribeResult
+          error?: string
+        }) => {
+          if (m.type === 'ready') {
+            clearTimeout(timeout)
+            worker = w
+            resolve(true)
+          } else if (m.id != null && pending.has(m.id)) {
+            const p = pending.get(m.id)!
+            pending.delete(m.id)
+            if (m.ok) p.resolve(m.result ?? { text: '', speakers: [] })
+            else p.reject(new Error(m.error ?? 'transcribe failed'))
+          }
         }
-      })
+      )
       w.on('error', (err: unknown) => {
         console.warn('[asr] worker 异常，回落主进程同步转写：', err instanceof Error ? err.message : err)
         clearTimeout(timeout)
@@ -177,17 +278,25 @@ function startWorker(): Promise<boolean> {
   return readyPromise
 }
 
-/** 异步转写（worker 线程，不阻塞主进程/UI） */
-export async function transcribeWithSpeakersAsync(filePath: string): Promise<string> {
+/** 异步转写（worker 线程，不阻塞主进程/UI）。registry = 该设备已注册声纹（用于匹配） */
+export async function transcribeWithSpeakersAsync(
+  filePath: string,
+  registry: { id: string; embedding: number[] }[]
+): Promise<TranscribeResult> {
   const ok = await startWorker()
   if (ok && worker) {
-    return new Promise<string>((resolve, reject) => {
+    return new Promise<TranscribeResult>((resolve, reject) => {
       const id = ++seq
       pending.set(id, { resolve, reject })
-      worker!.postMessage({ type: 'transcribe', id, file: filePath })
+      worker!.postMessage({ type: 'transcribe', id, file: filePath, registry })
     })
   }
-  return transcribeWithSpeakersSync(filePath)
+  return { text: transcribeWithSpeakersSync(filePath), speakers: [] }
+}
+
+/** 写声纹 demo 音频（wav，16kHz PCM） */
+export function writeDemoWav(filePath: string, samples: Float32Array, sampleRate: number): void {
+  sherpa.writeWave(filePath, { samples, sampleRate })
 }
 
 // ---------------------------------------------------------------- 同步实现（worker 失败时的回落路径）

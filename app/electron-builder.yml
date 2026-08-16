@@ -1,5 +1,5 @@
 appId: com.pgyou.echopod
-productName: Echo Pod
+productName: Echo回响
 directories:
   output: dist
   buildResources: build

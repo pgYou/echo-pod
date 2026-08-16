@@ -1,5 +1,5 @@
-import { useMemo, useState } from 'react'
-import { AudioLines, Check, ChevronDown, ChevronsDownUp, ChevronsUpDown, Circle, RefreshCw, Search, Settings2, Trash2, Usb } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { AudioLines, Check, ChevronDown, ChevronsDownUp, ChevronsUpDown, Circle, Fingerprint, Play, RefreshCw, Search, Settings2, Square, Trash2, Usb } from 'lucide-react'
 import type { AppState, DeviceInfo, RecordingMeta } from '../../../shared/types'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -10,12 +10,14 @@ import {
   DropdownMenuLabel,
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Progress } from '@/components/ui/progress'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { toast } from 'sonner'
 import CleanDeviceButton from './CleanDeviceButton'
 import RecordingRow from './RecordingRow'
 import SettingsDialog from './SettingsDialog'
+import VoiceprintsDialog from './VoiceprintsDialog'
 import { cn } from '@/lib/utils'
 
 interface Props {
@@ -24,6 +26,10 @@ interface Props {
   onSelect: (serial: string) => void
   selectedRecordingId: string | null
   onSelectRecording: (id: string | null) => void
+  /** 设备卡可见性上抛：滚出视口时 App 标题栏融合显示设备状态 */
+  onCardVisible: (visible: boolean) => void
+  /** 滚回顶部信号（变化即触发平滑滚动到顶） */
+  scrollToTopSignal: number
 }
 
 /**
@@ -42,14 +48,26 @@ export default function DevicePanel({
   serial,
   onSelect,
   selectedRecordingId,
-  onSelectRecording
+  onSelectRecording,
+  onCardVisible,
+  scrollToTopSignal
 }: Props): React.JSX.Element {
   const [query, setQuery] = useState('')
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [voiceprintsOpen, setVoiceprintsOpen] = useState(false)
   // 按天分组折叠状态（默认展开）
   const [collapsedDays, setCollapsedDays] = useState<Set<string>>(new Set())
-  // 设备卡滚出视口后渐显吸顶 topbar
-  const [cardScrolledOut, setCardScrolledOut] = useState(false)
+  // 「移除当天」二次确认中的日期
+  const [confirmDay, setConfirmDay] = useState<string | null>(null)
+  const rootRef = useRef<HTMLDivElement | null>(null)
+
+  // 标题栏状态区点击 → 列表平滑滚回顶部
+  useEffect(() => {
+    if (scrollToTopSignal <= 0) return
+    rootRef.current
+      ?.querySelector('[data-slot="scroll-area-viewport"]')
+      ?.scrollTo({ top: 0, behavior: 'smooth' })
+  }, [scrollToTopSignal])
 
   const toggleDay = (day: string): void => {
     setCollapsedDays((prev) => {
@@ -92,6 +110,12 @@ export default function DevicePanel({
     void window.api.deleteRecordings(serial, ids)
   }
 
+  // 转写进度（不依赖设备连接——转录在本地跑）
+  const transcribing = recordings.find((r) => r.transcribe.status === 'transcribing')
+  const queuedCount = recordings.filter((r) => r.transcribe.status === 'pending').length
+  const doneCount = recordings.filter((r) => r.transcribe.status === 'done').length
+  const transcribeTotal = doneCount + queuedCount + (transcribing ? 1 : 0)
+
   if (!device) return <div className="p-8 text-muted-foreground">设备不存在</div>
 
   const st = statusOf(device, sync != null)
@@ -112,33 +136,13 @@ export default function DevicePanel({
   }
 
   return (
-    <div className="relative h-full">
-      {/* 吸顶 topbar：设备卡滚出视口后渐显 */}
-      <div
-        className={cn(
-          'absolute inset-x-0 top-0 z-20 transition-opacity duration-200',
-          cardScrolledOut ? 'opacity-100' : 'pointer-events-none opacity-0'
-        )}
-      >
-        <div className="flex items-center gap-2 border-b bg-background/85 px-8 py-2.5 backdrop-blur">
-          <Circle className={cn('size-2 fill-current', st.color, sync && 'animate-pulse')} />
-          <span className="text-sm font-medium">{device.name ?? 'Echo Pod'}</span>
-          <span className="text-xs text-muted-foreground">{st.label}</span>
-          {sync && (
-            <span className="ml-2 text-xs text-muted-foreground">
-              同步 {sync.done}/{sync.total}
-            </span>
-          )}
-          <span className="ml-auto text-xs text-muted-foreground">{recordings.length} 条录音</span>
-        </div>
-      </div>
-
-      {/* 列表滚动区（渐变背景在 App 根节点，不随滚动） */}
+    <div ref={rootRef} className="relative h-full">
+      {/* 列表滚动区（渐变背景在 App 根节点，不随滚动；滚出设备卡时上报，App 标题栏融合显示状态） */}
       <ScrollArea
         className="h-full"
-        onScroll={(e) => setCardScrolledOut(e.currentTarget.scrollTop > 200)}
+        onScroll={(e) => onCardVisible(e.currentTarget.scrollTop <= 200)}
       >
-        <div className="mx-auto max-w-3xl space-y-6 p-8 pb-16">
+        <div className="mx-auto max-w-3xl space-y-6 px-8 pb-16">
           {/* 设备信息卡：白底、无框无影。左列 = logo（顶部对齐），右列 = 全部内容 */}
           <section className="flex gap-3 rounded-2xl bg-white p-6">
             {/* 应用标识（左列，唯一元素） */}
@@ -189,6 +193,13 @@ export default function DevicePanel({
                     {st.label}
                   </Badge>
                   <button
+                    onClick={() => setVoiceprintsOpen(true)}
+                    className="cursor-pointer rounded-md p-1.5 text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground"
+                    aria-label="声纹管理"
+                  >
+                    <Fingerprint className="size-4" />
+                  </button>
+                  <button
                     onClick={() => setSettingsOpen(true)}
                     className="cursor-pointer rounded-md p-1.5 text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground"
                     aria-label="设置"
@@ -203,6 +214,33 @@ export default function DevicePanel({
                 <span>硬件 {device.hw ?? '--'}</span>
                 <span>{recordings.length} 条录音</span>
               </div>
+
+              {/* 转写状态：进行中显示进度+停止；停止后有积压显示继续 */}
+              {transcribing ? (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                    <span className="min-w-0 truncate">
+                      转写中 · {doneCount + 1}/{transcribeTotal} · {transcribing.fileName}
+                    </span>
+                    <button
+                      onClick={() => void window.api.stopTranscribe()}
+                      className="flex shrink-0 cursor-pointer items-center gap-1 rounded-md px-1.5 py-1 outline-none transition-colors hover:bg-accent hover:text-destructive"
+                      aria-label="停止转写"
+                    >
+                      <Square className="size-3 fill-current" />
+                      停止
+                    </button>
+                  </div>
+                  <Progress value={((doneCount + (transcribing ? 1 : 0)) / transcribeTotal) * 100} />
+                </div>
+              ) : queuedCount > 0 ? (
+                <div className="flex items-center gap-3">
+                  <Button variant="outline" onClick={() => void window.api.resumeTranscribe(serial)}>
+                    <Play />
+                    继续转写（剩余 {queuedCount} 条）
+                  </Button>
+                </div>
+              ) : null}
 
               {/* 同步区：设备下方 */}
               {sync ? (
@@ -295,17 +333,47 @@ export default function DevicePanel({
                           {day} · {recs.length} 条
                         </h3>
                         <div className="h-px flex-1 bg-border" />
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            deleteRecordings(recs.map((r) => r.id))
-                          }}
-                          className="flex cursor-pointer items-center gap-1 rounded-md px-1.5 py-1 text-xs text-muted-foreground outline-none transition-all hover:bg-accent hover:text-destructive"
-                          aria-label={`移除 ${day} 的录音`}
-                        >
-                          <Trash2 className="size-3" />
-                          移除当天
-                        </button>
+                        <Popover open={confirmDay === day} onOpenChange={(v) => setConfirmDay(v ? day : null)}>
+                          <PopoverTrigger asChild>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                setConfirmDay((prev) => (prev === day ? null : day))
+                              }}
+                              className={cn(
+                                'flex cursor-pointer items-center gap-1 rounded-md px-1.5 py-1 text-xs outline-none transition-all hover:bg-accent hover:text-destructive',
+                                confirmDay === day ? 'text-destructive' : 'text-muted-foreground'
+                              )}
+                              aria-label={`移除 ${day} 的录音`}
+                            >
+                              <Trash2 className="size-3" />
+                              移除当天
+                            </button>
+                          </PopoverTrigger>
+                          <PopoverContent
+                            side="top"
+                            align="end"
+                            className="w-auto p-3"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <p className="text-xs">移除 {day} 的 {recs.length} 条录音？（设备上的原始文件不受影响）</p>
+                            <div className="mt-2.5 flex justify-end gap-2">
+                              <Button variant="ghost" size="sm" onClick={() => setConfirmDay(null)}>
+                                取消
+                              </Button>
+                              <Button
+                                variant="destructive"
+                                size="sm"
+                                onClick={() => {
+                                  setConfirmDay(null)
+                                  deleteRecordings(recs.map((r) => r.id))
+                                }}
+                              >
+                                确认移除
+                              </Button>
+                            </div>
+                          </PopoverContent>
+                        </Popover>
                       </header>
 
                       {/* 折叠容器：grid-template-rows 0fr↔1fr 过渡 + overflow hidden 实现缓动收起 */}
@@ -316,7 +384,7 @@ export default function DevicePanel({
                         )}
                       >
                         <div className="min-h-0 overflow-hidden">
-                          <div className="divide-y rounded-xl border bg-white">
+                          <div className="divide-y rounded-xl border bg-white overflow-hidden">
                             {recs.map((rec) => (
                               <RecordingRow
                                 key={rec.id}
@@ -340,6 +408,14 @@ export default function DevicePanel({
 
       {/* 设置弹框 */}
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
+      {/* 声纹管理弹框 */}
+      <VoiceprintsDialog
+        open={voiceprintsOpen}
+        onOpenChange={setVoiceprintsOpen}
+        serial={serial}
+        deviceName={device.name ?? 'Echo Pod'}
+        voiceprints={(state.voiceprints ?? {})[serial] ?? []}
+      />
     </div>
   )
 }

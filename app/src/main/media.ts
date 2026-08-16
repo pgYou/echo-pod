@@ -8,7 +8,7 @@ import { protocol } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
 import { Readable } from 'node:stream'
-import { recordingsRoot } from './state'
+import { recordingsRoot, voiceprintsRoot } from './state'
 
 const MIME: Record<string, string> = {
   wav: 'audio/wav',
@@ -34,9 +34,11 @@ export function handlePodProtocol(): void {
     const serial = url.hostname
     const relPath = decodeURIComponent(url.pathname).replace(/^\/+/, '')
 
-    // 防目录穿越：解析后必须仍在该设备的录音目录内
-    const root = path.join(recordingsRoot(), serial)
-    const full = path.resolve(root, relPath)
+    // 保留串号 _vp = 声纹 demo 音频：pod://_vp/<serial>/<file>.wav → voiceprints/<serial>/
+    // 其余 = 录音库：pod://<serial>/<relPath> → recordings/<serial>/
+    const root = serial === '_vp' ? voiceprintsRoot() : path.join(recordingsRoot(), serial)
+    const effectiveRel = relPath
+    const full = path.resolve(root, effectiveRel)
     if (!full.startsWith(root + path.sep)) {
       return new Response('forbidden', { status: 403 })
     }

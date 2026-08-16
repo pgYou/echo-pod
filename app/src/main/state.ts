@@ -2,12 +2,14 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { app, BrowserWindow } from 'electron'
-import type { AppState, DeviceInfo, RecordingMeta, SyncState } from '../shared/types'
+import type { AppState, DeviceInfo, RecordingMeta, SyncState, Voiceprint } from '../shared/types'
 import { getDataDir } from './settings'
 
 interface LibraryFile {
   devices: Record<string, DeviceInfo>
   recordings: Record<string, RecordingMeta[]>
+  /** 声纹库（按设备 serial 隔离；转写时自动注册出现过的声音） */
+  voiceprints?: Record<string, Voiceprint[]>
   /** 转写档案：音频文件被清理后保留的转写结果（id = serial+relPath+size），重同步同文件时恢复 */
   archive?: Record<string, RecordingMeta['transcribe']>
 }
@@ -25,6 +27,7 @@ export function loadLibrary(): void {
     const parsed = JSON.parse(raw) as LibraryFile
     state.devices = parsed.devices ?? {}
     state.recordings = parsed.recordings ?? {}
+    state.voiceprints = parsed.voiceprints ?? {}
     state.archive = parsed.archive ?? {}
     // 启动时所有设备离线
     for (const d of Object.values(state.devices)) {
@@ -92,7 +95,9 @@ export function takeArchivedTranscript(id: string): RecordingMeta['transcribe'] 
 }
 
 /**
- * 移除录音元数据（用户主动删除）。已完成转写存档（同文件再次同步时恢复，不重跑）。
+ * 移除录音元数据（用户主动删除）。
+ * 主动删除 = 不想要这份数据：同步清理转写档案（同文件再次同步将重新转写）。
+ * 意外丢失走 pruneMissingFiles，那条路径才存档（崩溃恢复语义）。
  * 返回被移除的元数据列表（调用方负责删音频文件）。
  */
 export function removeRecordings(serial: string, ids: string[]): RecordingMeta[] {
@@ -103,9 +108,7 @@ export function removeRecordings(serial: string, ids: string[]): RecordingMeta[]
   if (removed.length === 0) return []
   state.recordings[serial] = list.filter((r) => !idSet.has(r.id))
   for (const r of removed) {
-    if (r.transcribe.status === 'done' && r.transcribe.text) {
-      archiveTranscript(r.id, r.transcribe)
-    }
+    if (state.archive) delete state.archive[r.id]
   }
   emitState()
   return removed
@@ -124,6 +127,7 @@ export function snapshot(): AppState {
     devices: Object.values(state.devices)
       .sort((a, b) => a.serial.localeCompare(b.serial)),
     recordings: state.recordings,
+    voiceprints: state.voiceprints ?? {},
     sync: currentSync
   }
 }
@@ -180,4 +184,67 @@ export function getSync(): SyncState | null {
 export function recordingsRoot(): string {
   // 可配置（App 设置里的"数据保存路径"），默认 userData/recordings
   return getDataDir()
+}
+
+
+// ---------------------------------------------------------------- 声纹库（按设备隔离）
+
+export function voiceprintsRoot(): string {
+  return path.join(app.getPath('userData'), 'voiceprints')
+}
+
+export function getVoiceprints(serial: string): Voiceprint[] {
+  return state.voiceprints?.[serial] ?? []
+}
+
+/** 注册新声纹（默认名"声音 N"，N 为该设备已有声纹数 + 1，重命名后不回收编号） */
+export function addVoiceprint(serial: string, embedding: number[]): Voiceprint {
+  state.voiceprints ??= {}
+  const list = state.voiceprints[serial] ?? (state.voiceprints[serial] = [])
+  const n = list.length + 1
+  // id 碰撞概率忽略不计；demo 文件名同 id
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const crypto = require('node:crypto') as typeof import('node:crypto')
+  const id = `vp-${crypto.randomUUID().slice(0, 8)}`
+  const now = new Date().toISOString()
+  const vp: Voiceprint = {
+    id,
+    name: `声音 ${n}`,
+    embedding,
+    demoFile: `${id}.wav`,
+    firstSeen: now,
+    lastSeen: now,
+    occurrences: 1
+  }
+  list.push(vp)
+  emitState()
+  return vp
+}
+
+/** 已有声纹再次出现：出现次数 +1、刷新 lastSeen */
+export function touchVoiceprint(serial: string, id: string): void {
+  const vp = getVoiceprints(serial).find((v) => v.id === id)
+  if (!vp) return
+  vp.occurrences++
+  vp.lastSeen = new Date().toISOString()
+  emitState()
+}
+
+/** 完全删除声纹（返回被删对象，调用方负责删 demo 文件） */
+export function deleteVoiceprint(serial: string, id: string): Voiceprint | undefined {
+  const list = state.voiceprints?.[serial]
+  if (!list) return undefined
+  const vp = list.find((v) => v.id === id)
+  if (!vp) return undefined
+  state.voiceprints![serial] = list.filter((v) => v.id !== id)
+  emitState()
+  return vp
+}
+
+/** 重命名（名字不唯一：多个声纹可设同名 = 同一人） */
+export function renameVoiceprint(serial: string, id: string, name: string): void {
+  const vp = getVoiceprints(serial).find((v) => v.id === id)
+  if (!vp) return
+  vp.name = name.trim() || vp.name
+  emitState()
 }
