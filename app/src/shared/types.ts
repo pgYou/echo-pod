@@ -44,6 +44,9 @@ export interface SyncState {
   currentFile?: string
 }
 
+/** 录音列表视图：按条（逐条列表）| 按天（一天一行，侧边栏整读当日对话） */
+export type ViewMode = 'items' | 'days'
+
 /** 声纹（设备内自动注册的声音身份）。同名允许重复 = 多个声纹是同一人（识别拆分） */
 export interface Voiceprint {
   id: string

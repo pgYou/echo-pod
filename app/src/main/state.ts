@@ -221,12 +221,18 @@ export function addVoiceprint(serial: string, embedding: number[]): Voiceprint {
   return vp
 }
 
-/** 已有声纹再次出现：出现次数 +1、刷新 lastSeen */
-export function touchVoiceprint(serial: string, id: string): void {
+/** 已有声纹再次出现：出现次数 +1、刷新 lastSeen；带 embedding 时滚动加权平均入库（权重 = 历史出现次数，库随嗓音/环境漂移自我修正） */
+export function touchVoiceprint(serial: string, id: string, embedding?: number[]): void {
   const vp = getVoiceprints(serial).find((v) => v.id === id)
   if (!vp) return
   vp.occurrences++
   vp.lastSeen = new Date().toISOString()
+  if (embedding && embedding.length === vp.embedding.length) {
+    const w = vp.occurrences - 1 // 旧均值代表的历史样本数（本次已计入 occurrences）
+    const avg = vp.embedding.map((v, i) => (v * w + embedding[i]) / (w + 1))
+    const norm = Math.sqrt(avg.reduce((a, v) => a + v * v, 0)) + 1e-12
+    vp.embedding = avg.map((v) => v / norm)
+  }
   emitState()
 }
 

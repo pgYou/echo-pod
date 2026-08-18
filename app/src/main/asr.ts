@@ -141,21 +141,35 @@ function transcribe(file, registry) {
   if (!haveDiar) return { text: decode(wave.samples).trim(), speakers: [] }
   const segments = getDiarizer().process(wave.samples)
 
-  // 每个聚类取最长段做代表：提 embedding 与声纹库匹配（新声音自动注册）
-  const longest = new Map()
+  // 按聚类收集段：每聚类取最长 3 段提 embedding 后归一化平均（多点估计降方差，匹配/注册共用同一 embedding）。
+  // 注册门槛：聚类总语音 < 3s 不注册（短段 embedding 不稳，注册 = 往库里塞噪声锚点）；匹配照常
+  const byCluster = new Map()
   for (const seg of segments) {
-    const dur = seg.end - seg.start
-    if (!longest.has(seg.speaker) || dur > longest.get(seg.speaker).end - longest.get(seg.speaker).start) {
-      longest.set(seg.speaker, seg)
-    }
+    const arr = byCluster.get(seg.speaker)
+    if (arr) arr.push(seg)
+    else byCluster.set(seg.speaker, [seg])
   }
   const speakers = []
   const sr = wave.sampleRate
-  for (const [spk, seg] of longest) {
-    let s = Math.round(seg.start * sr)
-    let e = Math.round(seg.end * sr)
-    if (e - s > 12 * sr) e = s + 12 * sr // 代表段上限 12s
-    const emb = extractEmbedding(wave.samples.subarray(s, e))
+  for (const [spk, segs] of byCluster) {
+    segs.sort((a, b) => (b.end - b.start) - (a.end - a.start))
+    const totalDur = segs.reduce((acc, s) => acc + (s.end - s.start), 0)
+    const embs = []
+    for (const seg of segs.slice(0, 3)) {
+      const s = Math.round(seg.start * sr)
+      let e = Math.round(seg.end * sr)
+      if (e - s > 12 * sr) e = s + 12 * sr // 代表段上限 12s
+      const one = extractEmbedding(wave.samples.subarray(s, e))
+      if (one && one.length > 0) embs.push(one)
+    }
+    if (embs.length === 0) continue
+    const dim = embs[0].length
+    const avg = new Array(dim).fill(0)
+    for (const e of embs) {
+      for (let i = 0; i < dim; i++) avg[i] += e[i]
+    }
+    const norm = Math.sqrt(avg.reduce((acc, v) => acc + v * v, 0)) + 1e-12
+    const emb = avg.map((v) => v / norm)
     let voiceprintId = null
     let best = -1
     for (const v of registry || []) {
@@ -164,14 +178,16 @@ function transcribe(file, registry) {
     }
     if (best < VOICE_MATCH_THRESHOLD) voiceprintId = null
     // demo 截段：最长段前 10s
-    let ds = Math.round(seg.start * sr)
-    let de = Math.round(seg.end * sr)
+    const seg0 = segs[0]
+    let ds = Math.round(seg0.start * sr)
+    let de = Math.round(seg0.end * sr)
     if (de - ds > 10 * sr) de = ds + 10 * sr
     speakers.push({
       cluster: spk,
       voiceprintId,
-      newVoiceprint: voiceprintId ? null : {
-        embedding: Array.from(emb),
+      matchedEmbedding: voiceprintId ? emb : null,
+      newVoiceprint: voiceprintId || totalDur < 3 ? null : {
+        embedding: emb,
         demoSamples: wave.samples.slice(ds, de),
         sampleRate: sr
       }
@@ -207,6 +223,8 @@ parentPort.postMessage({ type: 'ready' })
 export interface SpeakerMatch {
   cluster: number
   voiceprintId: string | null
+  /** 命中已有声纹时的本次 embedding（主进程滚动平均入库，抗嗓音/环境漂移） */
+  matchedEmbedding: number[] | null
   newVoiceprint: { embedding: number[]; demoSamples: Float32Array; sampleRate: number } | null
 }
 

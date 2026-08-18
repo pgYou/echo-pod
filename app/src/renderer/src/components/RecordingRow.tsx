@@ -84,10 +84,10 @@ export default function RecordingRow({ recording, selected, onSelect, onDelete }
                 >
                   <p className="text-xs">删除这条录音？（设备上的原始文件不受影响）</p>
                   <div className="mt-2.5 flex justify-end gap-2">
-                    <Button variant="ghost" size="sm" onClick={() => setConfirmDelete(false)}>
+                    <Button variant="ghost" size="xs" onClick={() => setConfirmDelete(false)}>
                       取消
                     </Button>
-                    <Button variant="destructive" size="sm" onClick={onDelete}>
+                    <Button variant="destructive" size="xs" onClick={onDelete}>
                       确认删除
                     </Button>
                   </div>

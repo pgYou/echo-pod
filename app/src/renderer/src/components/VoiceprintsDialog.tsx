@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Fingerprint, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import type { Voiceprint } from '../../../shared/types'
@@ -82,10 +82,10 @@ function VoiceprintRow({ serial, vp }: { serial: string; vp: Voiceprint }): Reac
           <PopoverContent side="top" align="end" className="w-auto p-3">
             <p className="text-xs">完全删除「{vp.name}」？（demo 音频一并删除，转写文本不受影响）</p>
             <div className="mt-2.5 flex justify-end gap-2">
-              <Button variant="ghost" size="sm" onClick={() => setConfirmOpen(false)}>
+              <Button variant="ghost" size="xs" onClick={() => setConfirmOpen(false)}>
                 取消
               </Button>
-              <Button variant="destructive" size="sm" onClick={del}>
+              <Button variant="destructive" size="xs" onClick={del}>
                 确认删除
               </Button>
             </div>
@@ -100,15 +100,26 @@ function VoiceprintRow({ serial, vp }: { serial: string; vp: Voiceprint }): Reac
   )
 }
 
-/** 声纹管理弹框：设备内自动注册的声音列表（试听 / 重命名 / 删除） */
+/** 声纹管理弹框：设备内自动注册的声音列表（试听 / 重命名 / 删除）。默认按出现次数排序，可切注册顺序 */
 export default function VoiceprintsDialog({ open, onOpenChange, serial, deviceName, voiceprints }: Props): React.JSX.Element {
+  const [sortBy, setSortBy] = useState<'count' | 'registered'>('count')
+
+  // count = 出现次数降序（并列按最近出现）；registered = 入库顺序（state 数组的 push 序即注册序）
+  const sorted = useMemo(() => {
+    const list = [...voiceprints]
+    if (sortBy === 'count') {
+      list.sort((a, b) => b.occurrences - a.occurrences || b.lastSeen.localeCompare(a.lastSeen))
+    }
+    return list
+  }, [voiceprints, sortBy])
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="flex min-h-[26rem] flex-col sm:max-w-xl">
         <DialogHeader>
           <DialogTitle>声纹 · {deviceName}</DialogTitle>
           <DialogDescription>
-            设备上出现过的声音在转写时自动注册。多个声纹是同一人时，可将其命名为相同名字。
+            出现过的声音转写时自动注册
           </DialogDescription>
         </DialogHeader>
 
@@ -117,11 +128,36 @@ export default function VoiceprintsDialog({ open, onOpenChange, serial, deviceNa
             还没有声纹。同步并转写录音后，出现过的声音会自动注册到这里。
           </div>
         ) : (
-          <div className="max-h-[60vh] min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
-            {voiceprints.map((vp) => (
-              <VoiceprintRow key={vp.id} serial={serial} vp={vp} />
-            ))}
-          </div>
+          <>
+            {/* 排序切换 */}
+            <div className="flex items-center justify-end">
+              <div className="flex items-center rounded-md border p-0.5">
+                <button
+                  onClick={() => setSortBy('count')}
+                  className={cn(
+                    'cursor-pointer rounded-[5px] px-1.5 py-0.5 text-xs outline-none transition-colors',
+                    sortBy === 'count' ? 'bg-accent text-accent-foreground' : 'text-muted-foreground hover:text-foreground'
+                  )}
+                >
+                  按次数
+                </button>
+                <button
+                  onClick={() => setSortBy('registered')}
+                  className={cn(
+                    'cursor-pointer rounded-[5px] px-1.5 py-0.5 text-xs outline-none transition-colors',
+                    sortBy === 'registered' ? 'bg-accent text-accent-foreground' : 'text-muted-foreground hover:text-foreground'
+                  )}
+                >
+                  按注册
+                </button>
+              </div>
+            </div>
+            <div className="max-h-[60vh] min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
+              {sorted.map((vp) => (
+                <VoiceprintRow key={vp.id} serial={serial} vp={vp} />
+              ))}
+            </div>
+          </>
         )}
       </DialogContent>
     </Dialog>

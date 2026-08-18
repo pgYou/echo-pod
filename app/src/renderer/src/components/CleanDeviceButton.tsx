@@ -44,10 +44,10 @@ export default function CleanDeviceButton({ serial, hasRecordings }: Props): Rea
           释放设备存储空间，给新录音腾位置。
         </p>
         <div className="mt-3 flex justify-end gap-2">
-          <Button variant="ghost" size="sm" onClick={() => setOpen(false)}>
+          <Button variant="ghost" size="xs" onClick={() => setOpen(false)}>
             取消
           </Button>
-          <Button variant="destructive" size="sm" disabled={busy} onClick={() => void clean()}>
+          <Button variant="destructive" size="xs" disabled={busy} onClick={() => void clean()}>
             {busy ? '清理中…' : '确认清理'}
           </Button>
         </div>

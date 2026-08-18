@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { AudioLines, Check, ChevronDown, ChevronsDownUp, ChevronsUpDown, Circle, Fingerprint, Play, RefreshCw, Search, Settings2, Square, Trash2, Usb } from 'lucide-react'
-import type { AppState, DeviceInfo, RecordingMeta } from '../../../shared/types'
+import { AudioLines, CalendarDays, Check, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Circle, Fingerprint, List, Play, RefreshCw, Search, Settings2, Square, Trash2, Usb } from 'lucide-react'
+import type { AppState, DeviceInfo, RecordingMeta, ViewMode } from '../../../shared/types'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -18,7 +18,7 @@ import CleanDeviceButton from './CleanDeviceButton'
 import RecordingRow from './RecordingRow'
 import SettingsDialog from './SettingsDialog'
 import VoiceprintsDialog from './VoiceprintsDialog'
-import { cn } from '@/lib/utils'
+import { cn, hasMeaningfulText } from '@/lib/utils'
 
 interface Props {
   state: AppState
@@ -26,6 +26,12 @@ interface Props {
   onSelect: (serial: string) => void
   selectedRecordingId: string | null
   onSelectRecording: (id: string | null) => void
+  /** 录音列表视图：按条（逐条）| 按天（一天一行） */
+  viewMode: ViewMode
+  onViewMode: (mode: ViewMode) => void
+  /** 按天视图选中的日期（点击天行 → 侧边栏整读当日对话） */
+  selectedDay: string | null
+  onSelectDay: (day: string | null) => void
   /** 设备卡可见性上抛：滚出视口时 App 标题栏融合显示设备状态 */
   onCardVisible: (visible: boolean) => void
   /** 滚回顶部信号（变化即触发平滑滚动到顶） */
@@ -49,6 +55,10 @@ export default function DevicePanel({
   onSelect,
   selectedRecordingId,
   onSelectRecording,
+  viewMode,
+  onViewMode,
+  selectedDay,
+  onSelectDay,
   onCardVisible,
   scrollToTopSignal
 }: Props): React.JSX.Element {
@@ -281,7 +291,7 @@ export default function DevicePanel({
             <div className="mb-3 flex items-center justify-between gap-3">
               <div className="flex items-center gap-2">
                 <h2 className="text-sm font-semibold">录音</h2>
-                {dayGroups.length > 0 && (
+                {viewMode === 'items' && dayGroups.length > 0 && (
                   <Button
                     variant="ghost"
                     size="sm"
@@ -292,6 +302,31 @@ export default function DevicePanel({
                     {allCollapsed ? '展开全部' : '收起全部'}
                   </Button>
                 )}
+                {/* 视图切换：按条（逐条列表）/ 按天（一天一行 → 侧边栏整读当日对话） */}
+                <div className="flex items-center rounded-md border p-0.5">
+                  <button
+                    onClick={() => onViewMode('items')}
+                    className={cn(
+                      'flex cursor-pointer items-center gap-1 rounded-[5px] px-1.5 py-0.5 text-xs outline-none transition-colors',
+                      viewMode === 'items' ? 'bg-accent text-accent-foreground' : 'text-muted-foreground hover:text-foreground'
+                    )}
+                    aria-label="按条查看"
+                  >
+                    <List className="size-3" />
+                    按条
+                  </button>
+                  <button
+                    onClick={() => onViewMode('days')}
+                    className={cn(
+                      'flex cursor-pointer items-center gap-1 rounded-[5px] px-1.5 py-0.5 text-xs outline-none transition-colors',
+                      viewMode === 'days' ? 'bg-accent text-accent-foreground' : 'text-muted-foreground hover:text-foreground'
+                    )}
+                    aria-label="按天查看"
+                  >
+                    <CalendarDays className="size-3" />
+                    按天
+                  </button>
+                </div>
               </div>
               <div className="relative w-64">
                 <Search className="absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
@@ -306,6 +341,43 @@ export default function DevicePanel({
             {dayGroups.length === 0 ? (
               <div className="rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground">
                 {query ? `没有匹配"${query}"的录音` : '还没有同步的录音'}
+              </div>
+            ) : viewMode === 'days' ? (
+              /* 按天视图：一天一行，点击 → 右侧栏整读当日对话文稿 */
+              <div className="divide-y overflow-hidden rounded-xl border bg-white">
+                {dayGroups.map(([day, recs]) => {
+                  const validCount = recs.filter(
+                    (r) => r.transcribe.status === 'done' && hasMeaningfulText(r.transcribe.text)
+                  ).length
+                  const selected = day === selectedDay
+                  return (
+                    <div
+                      key={day}
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => onSelectDay(selected ? null : day)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') onSelectDay(selected ? null : day)
+                      }}
+                      className={cn(
+                        'flex cursor-pointer items-center gap-3 px-4 py-3 transition-colors outline-none',
+                        selected ? 'bg-accent' : 'hover:bg-accent/50'
+                      )}
+                    >
+                      <CalendarDays className="size-4 shrink-0 text-muted-foreground" />
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm font-medium">{day}</div>
+                        <div className="mt-0.5 text-xs text-muted-foreground">
+                          {recs.length} 条录音
+                          {validCount > 0 && validCount < recs.length ? ` · ${validCount} 条有文稿` : ''}
+                        </div>
+                      </div>
+                      <ChevronRight
+                        className={cn('size-4 shrink-0 text-muted-foreground transition-transform', selected && 'rotate-90')}
+                      />
+                    </div>
+                  )
+                })}
               </div>
             ) : (
               <div className="space-y-8">
@@ -358,12 +430,12 @@ export default function DevicePanel({
                           >
                             <p className="text-xs">移除 {day} 的 {recs.length} 条录音？（设备上的原始文件不受影响）</p>
                             <div className="mt-2.5 flex justify-end gap-2">
-                              <Button variant="ghost" size="sm" onClick={() => setConfirmDay(null)}>
+                              <Button variant="ghost" size="xs" onClick={() => setConfirmDay(null)}>
                                 取消
                               </Button>
                               <Button
                                 variant="destructive"
-                                size="sm"
+                                size="xs"
                                 onClick={() => {
                                   setConfirmDay(null)
                                   deleteRecordings(recs.map((r) => r.id))

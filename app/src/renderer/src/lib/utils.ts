@@ -26,3 +26,13 @@ export function formatDateTime(iso: string): string {
 export function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString("zh-CN")
 }
+
+/**
+ * 有效文稿判定：去掉说话人标签（[名字]/[说话人 N]，标签是元数据不算内容）后，
+ * 仍含汉字/字母/数字才算有实质文本。噪音录音的空转写常是零散标点（"· 。"之类），
+ * 仅 trim 判空挡不住。
+ */
+export function hasMeaningfulText(text?: string | null): boolean {
+  if (!text) return false
+  return /[\p{L}\p{N}]/u.test(text.replace(/\[[^\]]*\]/g, ''))
+}

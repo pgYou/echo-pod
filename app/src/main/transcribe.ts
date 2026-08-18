@@ -71,7 +71,7 @@ async function transcribeOne(rec: RecordingMeta): Promise<string> {
     const nameByCluster = new Map<number, string>()
     for (const sp of result.speakers) {
       if (sp.voiceprintId) {
-        touchVoiceprint(rec.serial, sp.voiceprintId)
+        touchVoiceprint(rec.serial, sp.voiceprintId, sp.matchedEmbedding ?? undefined)
         const name = getVoiceprints(rec.serial).find((v) => v.id === sp.voiceprintId)?.name
         if (name) nameByCluster.set(sp.cluster, name)
       } else if (sp.newVoiceprint) {
