@@ -17,6 +17,8 @@
 #include <time.h>
 #include <esp_mac.h>
 #include <Wire.h>
+#include <dirent.h>
+#include "pod_log.h"
 #include "config.h"
 #include "pod_board.h"
 #include "pod_display.h"
@@ -39,8 +41,7 @@ static bool muted = false;         // NORMAL 内的静音子态
 static bool usbWasPlugged = false;
 
 static pod::Battery battery;
-static int todayCount = 0;         // 今日归档段数（≥minRecordBytes 才计）
-static int segNo = 0;              // 当前段号（进入录音 +1）
+static int todayCount = 0;         // 今日归档段数（≥minRecordBytes 才计；开机从 SD 恢复）
 static uint32_t lastBatteryMs = 0;
 static uint32_t lowBatSince = 0;   // LOWBAT 进入时刻
 
@@ -48,21 +49,21 @@ static uint32_t lowBatSince = 0;   // LOWBAT 进入时刻
 static void dumpConfig() {
   auto hw = makeHardwareConfig();
   auto vad = makeVadParams();
-  Serial.println("---- 参数 ----");
-  Serial.printf("音频: %s %dHz | 存储: %s %s\n",
+  pod::log::event("---- 参数 ----\n");
+  pod::log::event("音频: %s %dHz | 存储: %s %s\n",
                 hw.useEs8311 ? "ES8311(I2S STD)" : "PDM",
                 hw.sampleRate,
                 hw.useSdMmc ? "SD_MMC 1-bit" : "SPI SD", hw.recordDir);
-  Serial.printf("预滚 %uB(~%us) 最长段 %us 最短段 %uB\n",
+  pod::log::event("预滚 %uB(~%us) 最长段 %us 最短段 %uB\n",
                 (unsigned)hw.ringBytes,
                 (unsigned)(hw.ringBytes / (hw.sampleRate * 2)),
                 (unsigned)(hw.maxRecordMs / 1000), (unsigned)hw.minRecordBytes);
-  Serial.printf("VAD: mode=%d frame=%dms attack=%.2f release=%.2f\n",
+  pod::log::event("VAD: mode=%d frame=%dms attack=%.2f release=%.2f\n",
                 (int)vad.vadMode, vad.frameMs, vad.attack, vad.release);
-  Serial.printf("     阈值 high=%.2f mid=%.2f low=%.2f hangover=%dms warmup=%dms window=%d\n",
+  pod::log::event("     阈值 high=%.2f mid=%.2f low=%.2f hangover=%dms warmup=%dms window=%d\n",
                 vad.highThreshold, vad.midThreshold, vad.lowThreshold,
                 (int)vad.hangoverMs, (int)vad.warmupMs, vad.frameWindow);
-  Serial.printf("交互: 短按<%ums 长按%ums 格式化%ums | 低电%d%%→%us关机\n",
+  pod::log::event("交互: 短按<%ums 长按%ums 格式化%ums | 低电%d%%→%us关机\n",
                 (unsigned)KEY_SHORT_MS, (unsigned)KEY_HOLD_MS,
                 (unsigned)KEY_FORMAT_MS, BAT_LOW_PCT,
                 (unsigned)(LOWBAT_SHUTDOWN_MS / 1000));
@@ -78,7 +79,7 @@ static void renderPage() {
   if (pod::rtcRead(rt))
     snprintf(info.clock, sizeof(info.clock), "%02d:%02d", rt.h, rt.mi);
   info.todayCount = todayCount;
-  info.segNo = segNo;
+  info.segNo = todayCount + 1;  // 正在录的是下一序号
 
   using P = pod::Page;
   pod::Page page = P::STANDBY;
@@ -98,49 +99,70 @@ static void renderPage() {
 static void requestShutdown() {
   if (recorder.getState() == WavRecorder::State::RECORDING) recorder.splitSegment();
   pod::setLed(pod::Led::OFF);
-  Serial.println("== PWR 长按 3s：关机 ==");
+  pod::log::event("== PWR 长按 3s：关机 ==\n");
   pod::showPage(pod::Page::SHUTDOWN, pod::PageInfo{});
   delay(2500);  // 让用户看清（电池断电后墨水屏画面驻留）
   if (!battery.charging) {
-    Serial.println("物理断电（GPIO17 拉低）—— bye");
+    pod::log::event("物理断电（GPIO17 拉低）—— bye\n");
     Serial.flush();
     pod::powerOff();
     for (;;) delay(1000);  // 若仍活着 = USB 供电
   }
-  Serial.println("USB 供电中关不掉 → 回到待机（拔线后长按 PWR 真关机）");
+  pod::log::event("USB 供电中关不掉 → 回到待机（拔线后长按 PWR 真关机）\n");
 }
 
 // ---- WavRecorder 回调 ----
 static void onRecorderState(WavRecorder::State s) {
   if (s == WavRecorder::State::RECORDING) {
-    segNo++;
-    Serial.printf("[rec] >>> %s (vad score=%.2f ≥high=%.2f, 段号%d)\n",
+    pod::setLed(pod::Led::ON);  // 录音常亮（interaction-design §7，v0.1.0 漏驱动实测补）
+    pod::log::event("[rec] >>> %s (vad score=%.2f ≥high=%.2f, 第%d段)\n",
                   recorder.getCurrentPath(), recorder.getVadScore(),
-                  makeVadParams().highThreshold, segNo);
+                  makeVadParams().highThreshold, todayCount + 1);
   } else {
     uint32_t bytes = recorder.getDataBytes();
     bool valid = bytes >= makeHardwareConfig().minRecordBytes;
     if (valid) todayCount++;
-    Serial.printf("[rec] <<< %luB %.1fs score=%.2f lowMs=%ums %s\n",
+    pod::log::event("[rec] <<< %luB %.1fs score=%.2f lowMs=%ums %s\n",
                   (unsigned long)bytes, recorder.getRecordMs() / 1000.0,
                   recorder.getVadScore(), (unsigned)recorder.getVadLowMs(),
                   valid ? "(归档)" : "(过短已删)");
+    if (mode == PodMode::NORMAL && !muted) pod::setLed(pod::Led::OFF);  // 回监听灭灯
   }
   renderPage();  // 段落切换刷屏（RECORDING↔STANDBY / 切段后新段号）
 }
 
 static void onRecorderError(const char *msg) {
-  Serial.printf("[rec] X %s\n", msg);
+  pod::log::event("[rec] X %s\n", msg);
   // SD 类错误升级 ERROR 态：数据完整性优先，继续监听无意义（重新插卡后重启恢复）
   if (strstr(msg, "SD")) {
     mode = PodMode::ERROR_;
     pod::setLed(pod::Led::OFF);
     renderPage();
-    Serial.println("[pod] SD 异常 → ERROR 态（重新插卡后重启设备）");
+    pod::log::event("[pod] SD 异常 → ERROR 态（重新插卡后重启设备）\n");
   }
 }
 
 static void enterSync();  // 定义在下方（setup 先用）
+
+// ---- 今日段数恢复（跨重启续算：扫今天日期目录的 .wav 数）----
+static int countTodayWavs() {
+  time_t now;
+  time(&now);
+  struct tm ti;
+  localtime_r(&now, &ti);
+  char dir[48];
+  strftime(dir, sizeof(dir), "/sdcard/echo-pod/%Y-%m-%d", &ti);
+  DIR *d = opendir(dir);
+  if (!d) return 0;
+  int n = 0;
+  struct dirent *e;
+  while ((e = readdir(d))) {
+    size_t l = strlen(e->d_name);
+    if (l >= 4 && strcasecmp(e->d_name + l - 4, ".wav") == 0) n++;
+  }
+  closedir(d);
+  return n;
+}
 
 // ---- .echo-pod 标志文件（device-protocol.md v1.0；无则开卡写入）----
 static void ensureMarker() {
@@ -180,9 +202,9 @@ static void ensureMarker() {
   if (f) {
     size_t n = fwrite(json, 1, strlen(json), f);
     fclose(f);
-    Serial.printf("[sd] 标志文件已写入 serial=%s fw=%s（%uB）\n", serial, FW_VERSION, (unsigned)n);
+    pod::log::event("[sd] 标志文件已写入 serial=%s fw=%s（%uB）\n", serial, FW_VERSION, (unsigned)n);
   } else {
-    Serial.println("[sd] X 标志文件写入失败（open 失败）");
+    pod::log::event("[sd] X 标志文件写入失败（open 失败）\n");
   }
 }
 
@@ -202,7 +224,7 @@ void setup() {
 
   Serial.begin(115200);
   delay(1500);
-  Serial.printf("\n=== %s v%s（%s）===\n", FW_NAME, FW_VERSION, HW_ID);
+  pod::log::event("\n=== %s v%s（%s）===\n", FW_NAME, FW_VERSION, HW_ID);
 
   // ---- I2C 最早诊断（在其他模块碰总线前）----
   {
@@ -242,7 +264,7 @@ void setup() {
 
   // 录音链路（ES8311 + SD_MMC + VAD）
   if (!recorder.begin(makeHardwareConfig(), makeVadParams())) {
-    Serial.println("[sd] 初始化失败 → ERROR 态（长按 PWR 关机）");
+    pod::log::event("[sd] 初始化失败 → ERROR 态（长按 PWR 关机）\n");
     mode = PodMode::ERROR_;
     battery = pod::batterySample();
     renderPage();
@@ -252,12 +274,15 @@ void setup() {
   recorder.onError(onRecorderError);
   recorderFsReady = true;
   ensureMarker();  // 开卡 / 版本更新（B6）
+  pod::log::begin();  // SD 日志开始（之后的 event 双写串口+卡）
+  todayCount = countTodayWavs();  // 跨重启续算今日段数
+  pod::log::event("[sd] 今日已归档 %d 段（从卡恢复）\n", todayCount);
 
   // 串口校时通道（电脑可发 "SETTIME:<unix秒>\n"；RTC 直读已为主源，此为校准入口）
   timeSync.begin(Serial, "CST-8");
 
   battery = pod::batterySample();
-  Serial.printf("[bat] 首采 %.2fV %d%%%s\n", battery.volts, battery.pct,
+  pod::log::event("[bat] 首采 %.2fV %d%%%s\n", battery.volts, battery.pct,
                 battery.charging ? " 充电中" : "");
   dumpConfig();
   usbWasPlugged = battery.charging;
@@ -274,7 +299,7 @@ static void enterSync() {
   if (recorder.getState() == WavRecorder::State::RECORDING) recorder.splitSegment();
   pod::setLed(pod::Led::BLINK_500MS);
   renderPage();
-  Serial.println("[usb] 插入 → 同步态（录音暂停）");
+  pod::log::event("[usb] 插入 → 同步态（录音暂停）\n");
 }
 
 static void exitSync() {
@@ -282,7 +307,7 @@ static void exitSync() {
   recorder.setPaused(false);
   pod::setLed(pod::Led::OFF);
   renderPage();
-  Serial.println("[usb] 拔出 → 恢复监听");
+  pod::log::event("[usb] 拔出 → 恢复监听\n");
 }
 
 // ---- loop ----
@@ -293,14 +318,14 @@ void loop() {
       if (mode == PodMode::NORMAL &&
           recorder.getState() == WavRecorder::State::RECORDING) {
         recorder.splitSegment();  // 切段：归档+立即开新段（仍在说话）
-        Serial.printf("[key] BOOT 短按 → 切段 (vad score=%.2f，%s)\n",
+        pod::log::event("[key] BOOT 短按 → 切段 (vad score=%.2f，%s)\n",
                       recorder.getVadScore(),
                       recorder.getVadScore() >= makeVadParams().highThreshold
                           ? "仍激活，将自动开新段" : "已静，回监听");
       } else {
         battery = pod::batterySample();  // 手动刷新状态页（时间/电量/充电态）
         renderPage();
-        Serial.println("[key] BOOT 短按 → 刷新状态页");
+        pod::log::event("[key] BOOT 短按 → 刷新状态页\n");
       }
       break;
     case pod::KeyEvent::BOOT_HOLD3S:
@@ -315,16 +340,17 @@ void loop() {
       break;
     case pod::KeyEvent::BOOT_HOLD5S:
       if (mode == PodMode::ERROR_)
-        Serial.println("[key] 固件内格式化 v0.2.0 提供；请先用电脑 FAT32 格式化后重新插卡");
+        pod::log::event("[key] 固件内格式化 v0.2.0 提供；请先用电脑 FAT32 格式化后重新插卡\n");
       break;
     case pod::KeyEvent::PWR_HOLD3S:
       if (mode != PodMode::SYNC) requestShutdown();  // USB 在线不关机（§5）
-      else Serial.println("[key] USB 供电中关不掉，拔线后长按 PWR");
+      else pod::log::event("[key] USB 供电中关不掉，拔线后长按 PWR\n");
       break;
     default:
       break;
   }
   pod::ledTick();
+  pod::log::tick();
 
   // 2. ERROR 态：插回检测提示 + 电池周期采样（录音链路未起）
   if (mode == PodMode::ERROR_) {
@@ -334,14 +360,14 @@ void loop() {
       lastSdHint = millis();
       if (sdProbeOk()) {  // 开机即无卡的场景 fs() 不可用，靠 recorderFsReady 区分
         cardBack = true;
-        Serial.println("[sd] 卡已插回：长按 PWR 关机后再开机恢复录音");
+        pod::log::event("[sd] 卡已插回：长按 PWR 关机后再开机恢复录音\n");
       }
     }
     if (millis() - lastBatteryMs > 60000) {
       lastBatteryMs = millis();
       battery = pod::batterySample();
       if (battery.pct <= BAT_LOW_PCT && !battery.charging) {
-        Serial.println("[bat] 低电 → 关机");
+        pod::log::event("[bat] 低电 → 关机\n");
         requestShutdown();
       }
     }
@@ -366,12 +392,12 @@ void loop() {
     lastSdProbe = millis();
     if (!sdProbeOk()) {
       sdFailCount++;
-      Serial.printf("[sd] 探测失败 %d/2\n", sdFailCount);
+      pod::log::event("[sd] 探测失败 %d/2\n", sdFailCount);
       if (sdFailCount >= 2) {
         mode = PodMode::ERROR_;
         pod::setLed(pod::Led::OFF);
         renderPage();
-        Serial.println("[sd] 连续失败 → 判定卡拔出，ERROR 态（插回后长按 PWR 重开机恢复）");
+        pod::log::event("[sd] 连续失败 → 判定卡拔出，ERROR 态（插回后长按 PWR 重开机恢复）\n");
         return;
       }
     } else {
@@ -383,7 +409,7 @@ void loop() {
   if (millis() - lastBatteryMs > 60000) {
     lastBatteryMs = millis();
     battery = pod::batterySample();
-    Serial.printf("[bat] %.2fV %d%%%s\n", battery.volts, battery.pct,
+    pod::log::event("[bat] %.2fV %d%%%s\n", battery.volts, battery.pct,
                   battery.charging ? " 充电中" : "");
   }
 
@@ -392,9 +418,9 @@ void loop() {
     if (battery.charging || battery.pct > BAT_LOW_PCT) {
       mode = PodMode::NORMAL;  // 解除
       renderPage();
-      Serial.println("[bat] 低电解除");
+      pod::log::event("[bat] 低电解除\n");
     } else if (millis() - lowBatSince > LOWBAT_SHUTDOWN_MS) {
-      Serial.println("[bat] 低电 60s 到 → 强制关机");
+      pod::log::event("[bat] 低电 60s 到 → 强制关机\n");
       requestShutdown();
     }
   } else if (battery.pct <= BAT_LOW_PCT && !battery.charging) {
@@ -403,7 +429,7 @@ void loop() {
     if (recorder.getState() == WavRecorder::State::RECORDING) recorder.splitSegment();
     pod::setLed(pod::Led::OFF);
     renderPage();  // 强制刷警告屏（§6.3 唯一允许的电量触发刷新）
-    Serial.println("[bat] 低电警告（60s 后自动关机）");
+    pod::log::event("[bat] 低电警告（60s 后自动关机）\n");
   }
 
   // 7. VAD 心跳（5s：观察底噪水平与触发行为，调 high/low 阈值依据）

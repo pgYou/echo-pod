@@ -52,9 +52,9 @@ inline VadTrigger::Params makeVadParams() {
   vad.vadMode = VAD_MODE_2;  // Very Aggressive：严格判人声，挡拍桌子/敲击等噪声
   vad.sampleRate = 16000;
   vad.frameMs = 30;           // VADNet 帧长 → 480 样本/帧
-  vad.attack = 0.92f;         // 11 帧≈330ms 持续 SPEECH 才触发（有 2s 预录兜底）
+  vad.attack = 0.94f;         // 15 帧≈450ms 持续 SPEECH 才触发（v0.1.0 佩戴实测偏灵敏，从 0.92 收紧）
   vad.release = 0.92f;        // 慢降 τ≈360ms（对话间隙 score 缓降）
-  vad.highThreshold = 0.60f;  // 上穿 → ACTIVE
+  vad.highThreshold = 0.68f;  // 上穿 → ACTIVE（佩戴环境噪声实测易触发，0.60→0.68）
   vad.midThreshold = 0.30f;   // >=MID 才清零 hangover（防抖动重置）
   vad.lowThreshold = 0.20f;   // <LOW 累计 hangover
   vad.hangoverMs = 6000;      // lowMs 累计满 6s 才停
