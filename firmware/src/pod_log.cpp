@@ -8,7 +8,7 @@
 
 namespace pod::log {
 
-static constexpr const char *LOG_DIR = "/sdcard/.logs";
+static constexpr const char *LOG_DIR = "/sdcard/echo-pod/.logs";
 static constexpr int KEEP_DAYS = 7;
 
 static FILE *logFile_ = nullptr;
