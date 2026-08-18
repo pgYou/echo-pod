@@ -44,6 +44,14 @@ export interface SyncState {
   currentFile?: string
 }
 
+/** 转写队列快照（主进程实时推送；只反映本次入队的任务，"待转写"积压不算在内） */
+export interface TranscribeJob {
+  serial: string
+  total: number
+  done: number
+  currentFile?: string
+}
+
 /** 录音列表视图：按条（逐条列表）| 按天（一天一行，侧边栏整读当日对话） */
 export type ViewMode = 'items' | 'days'
 
@@ -70,4 +78,6 @@ export interface AppState {
   /** 按 serial 分组的声纹（设备隔离） */
   voiceprints: Record<string, Voiceprint[]>
   sync: SyncState | null
+  /** 转写队列快照（无任务时为 null） */
+  transcribe: TranscribeJob | null
 }

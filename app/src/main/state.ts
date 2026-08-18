@@ -2,7 +2,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { app, BrowserWindow } from 'electron'
-import type { AppState, DeviceInfo, RecordingMeta, SyncState, Voiceprint } from '../shared/types'
+import type { AppState, DeviceInfo, RecordingMeta, SyncState, TranscribeJob, Voiceprint } from '../shared/types'
 import { getDataDir } from './settings'
 
 interface LibraryFile {
@@ -128,11 +128,18 @@ export function snapshot(): AppState {
       .sort((a, b) => a.serial.localeCompare(b.serial)),
     recordings: state.recordings,
     voiceprints: state.voiceprints ?? {},
-    sync: currentSync
+    sync: currentSync,
+    transcribe: currentTranscribe
   }
 }
 
 let currentSync: SyncState | null = null
+let currentTranscribe: TranscribeJob | null = null
+
+/** 转写队列快照（transcribe.ts 逐条更新；队列为空时置 null）。不主动 emit，由调用方决定时机 */
+export function setTranscribeJob(job: TranscribeJob | null): void {
+  currentTranscribe = job
+}
 
 export function emitState(): void {
   const snap = snapshot()

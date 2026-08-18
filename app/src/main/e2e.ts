@@ -2,7 +2,8 @@
 // 用法：ECHO_POD_E2E=1 npm start（或 npx electron . --e2e）
 // 依赖：已插入的模拟/真实录音豆设备（.echo-pod 标志文件 + echo-pod/ 录音目录）
 import { app } from 'electron'
-import { snapshot } from './state'
+import { getRecordings, snapshot } from './state'
+import { enqueueTranscribe } from './transcribe'
 import { syncDevice } from './sync'
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
@@ -31,6 +32,10 @@ export async function runE2E(): Promise<void> {
     const t0 = Date.now()
     const synced = await syncDevice(target.serial)
     log(`同步完成：${synced} 个文件，耗时 ${((Date.now() - t0) / 1000).toFixed(1)}s`)
+
+    // 正式交互是同步后弹框勾选；e2e 无 UI，直接全量入队
+    enqueueTranscribe(getRecordings(target.serial).filter((r) => r.transcribe.status === 'pending'))
+    log('已入转写队列（无 UI 全量模式）')
 
     // 等待转写队列排空
     for (;;) {

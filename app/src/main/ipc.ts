@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { snapshot, removeRecordings, recordingsRoot, findRecording, getDevice, renameVoiceprint, deleteVoiceprint, voiceprintsRoot } from './state'
 import { syncDevice } from './sync'
-import { enqueueTranscribe, requeueForVoiceprint, resumeTranscribe, stopTranscribe } from './transcribe'
+import { enqueueTranscribe, requeueForVoiceprint, stopTranscribe } from './transcribe'
 import { getRecordings } from './state'
 import { getDataDir, setDataDir } from './settings'
 import { scanDeviceFiles, scanVolumes } from './devices'
@@ -71,10 +71,6 @@ export function registerIpc(): void {
   ipcMain.handle('app:stop-transcribe', () => {
     stopTranscribe()
     return true
-  })
-  ipcMain.handle('app:resume-transcribe', (_event, serial: unknown) => {
-    if (typeof serial !== 'string') throw new Error('invalid serial')
-    return resumeTranscribe(serial)
   })
 
   // 从已转写录音补注册声纹（重置为待转写并重新入队）

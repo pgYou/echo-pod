@@ -25,7 +25,6 @@ const api = {
   deleteVoiceprint: (serial: string, id: string): Promise<boolean> =>
     ipcRenderer.invoke('app:delete-voiceprint', serial, id),
   stopTranscribe: (): Promise<boolean> => ipcRenderer.invoke('app:stop-transcribe'),
-  resumeTranscribe: (serial: string): Promise<number> => ipcRenderer.invoke('app:resume-transcribe', serial),
   transcribeOne: (serial: string, id: string): Promise<boolean> =>
     ipcRenderer.invoke('app:transcribe-one', serial, id),
   transcribeSelected: (serial: string, ids: string[]): Promise<number> =>

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { AudioLines, CalendarDays, Check, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Circle, Fingerprint, List, Play, RefreshCw, Search, Settings2, Square, Trash2, Usb } from 'lucide-react'
+import { AudioLines, CalendarDays, Check, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Circle, Fingerprint, List, RefreshCw, Search, Settings2, Speech, Square, Trash2, Usb } from 'lucide-react'
 import type { AppState, DeviceInfo, RecordingMeta, ViewMode } from '../../../shared/types'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -17,6 +17,7 @@ import { toast } from 'sonner'
 import CleanDeviceButton from './CleanDeviceButton'
 import RecordingRow from './RecordingRow'
 import SettingsDialog from './SettingsDialog'
+import TranscribeSelectDialog from './TranscribeSelectDialog'
 import VoiceprintsDialog from './VoiceprintsDialog'
 import { cn, hasMeaningfulText } from '@/lib/utils'
 
@@ -65,6 +66,8 @@ export default function DevicePanel({
   const [query, setQuery] = useState('')
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [voiceprintsOpen, setVoiceprintsOpen] = useState(false)
+  // 批量转写弹框（设备卡常备行的入口）
+  const [batchOpen, setBatchOpen] = useState(false)
   // 按天分组折叠状态（默认展开）
   const [collapsedDays, setCollapsedDays] = useState<Set<string>>(new Set())
   // 「移除当天」二次确认中的日期
@@ -120,11 +123,12 @@ export default function DevicePanel({
     void window.api.deleteRecordings(serial, ids)
   }
 
-  // 转写进度（不依赖设备连接——转录在本地跑）
-  const transcribing = recordings.find((r) => r.transcribe.status === 'transcribing')
-  const queuedCount = recordings.filter((r) => r.transcribe.status === 'pending').length
-  const doneCount = recordings.filter((r) => r.transcribe.status === 'done').length
-  const transcribeTotal = doneCount + queuedCount + (transcribing ? 1 : 0)
+  // 转写队列快照（仅本设备的任务展示进度；队列真实状态由主进程推送，不再从 pending 数反推）
+  const transcribeJob = state.transcribe?.serial === serial ? state.transcribe : null
+  // 未转写（含上次失败）：批量转写的候选
+  const untranscribed = recordings.filter(
+    (r) => r.transcribe.status === 'pending' || r.transcribe.status === 'failed'
+  )
 
   if (!device) return <div className="p-8 text-muted-foreground">设备不存在</div>
 
@@ -225,32 +229,40 @@ export default function DevicePanel({
                 <span>{recordings.length} 条录音</span>
               </div>
 
-              {/* 转写状态：进行中显示进度+停止；停止后有积压显示继续 */}
-              {transcribing ? (
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
-                    <span className="min-w-0 truncate">
-                      转写中 · {doneCount + 1}/{transcribeTotal} · {transcribing.fileName}
-                    </span>
-                    <button
-                      onClick={() => void window.api.stopTranscribe()}
-                      className="flex shrink-0 cursor-pointer items-center gap-1 rounded-md px-1.5 py-1 outline-none transition-colors hover:bg-accent hover:text-destructive"
-                      aria-label="停止转写"
-                    >
-                      <Square className="size-3 fill-current" />
-                      停止
-                    </button>
-                  </div>
-                  <Progress value={((doneCount + (transcribing ? 1 : 0)) / transcribeTotal) * 100} />
+              {/* 转写常备行：左 = 状态（转写中显示进度 + 停止；否则"当前无转写任务"），右 = 批量转写入口 */}
+              <div className="flex items-center gap-3">
+                <div className="min-w-0 flex-1">
+                  {transcribeJob ? (
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                        <span className="min-w-0 truncate">
+                          转写中 · {transcribeJob.done + 1}/{transcribeJob.total} · {transcribeJob.currentFile}
+                        </span>
+                        <button
+                          onClick={() => void window.api.stopTranscribe()}
+                          className="flex shrink-0 cursor-pointer items-center gap-1 rounded-md px-1.5 py-1 outline-none transition-colors hover:bg-accent hover:text-destructive"
+                          aria-label="停止转写"
+                        >
+                          <Square className="size-3 fill-current" />
+                          停止
+                        </button>
+                      </div>
+                      <Progress value={(transcribeJob.done / transcribeJob.total) * 100} />
+                    </div>
+                  ) : (
+                    <span className="text-xs text-muted-foreground">当前无转写任务</span>
+                  )}
                 </div>
-              ) : queuedCount > 0 ? (
-                <div className="flex items-center gap-3">
-                  <Button variant="outline" onClick={() => void window.api.resumeTranscribe(serial)}>
-                    <Play />
-                    继续转写（剩余 {queuedCount} 条）
-                  </Button>
-                </div>
-              ) : null}
+                <Button
+                  variant="outline"
+                  className="shrink-0"
+                  disabled={untranscribed.length === 0}
+                  onClick={() => setBatchOpen(true)}
+                >
+                  <Speech />
+                  批量转写{untranscribed.length > 0 ? `（${untranscribed.length}）` : ''}
+                </Button>
+              </div>
 
               {/* 同步区：设备下方 */}
               {sync ? (
@@ -481,6 +493,27 @@ export default function DevicePanel({
 
       {/* 设置弹框 */}
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
+      {/* 批量转写弹框：按天分组勾选未转写（含失败）录音 */}
+      <TranscribeSelectDialog
+        open={batchOpen}
+        onClose={() => setBatchOpen(false)}
+        title="批量转写"
+        description="选择要转写的录音（含上次失败的）。已在转写队列中的不会重复加入。"
+        items={untranscribed.map((r) => ({
+          id: r.id,
+          fileName: r.fileName,
+          day: r.relPath.split('/')[1] ?? '',
+          durationSec: r.durationSec,
+          size: r.size,
+          failed: r.transcribe.status === 'failed'
+        }))}
+        onConfirm={(ids) => {
+          setBatchOpen(false)
+          if (ids.length > 0) {
+            void window.api.transcribeSelected(serial, ids).then((n) => toast.success(`已加入转写队列 ${n} 条`))
+          }
+        }}
+      />
       {/* 声纹管理弹框 */}
       <VoiceprintsDialog
         open={voiceprintsOpen}

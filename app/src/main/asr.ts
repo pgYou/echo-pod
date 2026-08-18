@@ -235,9 +235,24 @@ export interface TranscribeResult {
 
 let worker: Worker | null = null
 let workerFailed = false
+let workerTerminated = false // 主动 terminate（初始化超时路径），不算异常死亡
+let workerDeaths = 0 // 运行期死亡次数：≥2 则粘性回落主进程同步转写，避免逐条重启风暴
 let readyPromise: Promise<boolean> | null = null
 let seq = 0
 const pending = new Map<number, { resolve: (r: TranscribeResult) => void; reject: (err: Error) => void }>()
+
+/**
+ * worker 死亡恢复：reject 全部在途请求（否则 await 永不落定，转写队列永久卡死——
+ * 表现为后续手动转写也无反应），并允许下一次调用重启新 worker。
+ */
+function killWorker(w: Worker, reason: string): void {
+  for (const p of pending.values()) p.reject(new Error(reason))
+  pending.clear()
+  if (worker === w) worker = null
+  workerDeaths++
+  if (workerDeaths >= 2) workerFailed = true
+  readyPromise = null
+}
 
 function startWorker(): Promise<boolean> {
   if (readyPromise) return readyPromise
@@ -252,9 +267,11 @@ function startWorker(): Promise<boolean> {
       const scriptPath = path.join(app.getPath('userData'), 'asr-worker.cjs')
       fs.writeFileSync(scriptPath, WORKER_SCRIPT)
 
+      workerTerminated = false
       const w = new Worker(scriptPath, { workerData: { modelsRoot: modelsRoot(), nodeModulesDir } })
       const timeout = setTimeout(() => {
         console.warn('[asr] worker 初始化超时，回落主进程同步转写')
+        workerTerminated = true
         void w.terminate()
         workerFailed = true
         resolve(false)
@@ -282,9 +299,19 @@ function startWorker(): Promise<boolean> {
         }
       )
       w.on('error', (err: unknown) => {
-        console.warn('[asr] worker 异常，回落主进程同步转写：', err instanceof Error ? err.message : err)
+        const msg = err instanceof Error ? err.message : String(err)
+        console.warn('[asr] worker 异常：', msg)
         clearTimeout(timeout)
-        workerFailed = true
+        if (worker === w) killWorker(w, `转写 worker 异常：${msg}`) // 运行期死亡 → 恢复
+        else workerFailed = true // 启动期死亡 → 粘性回落
+        resolve(false)
+      })
+      w.on('exit', (code: number) => {
+        clearTimeout(timeout)
+        if (workerTerminated) return // 主动 terminate，超时路径已处理
+        console.warn(`[asr] worker 退出（code ${code}）`)
+        if (worker === w) killWorker(w, `转写 worker 异常退出（code ${code}）`)
+        else workerFailed = true
         resolve(false)
       })
     } catch (err) {

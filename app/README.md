@@ -10,8 +10,10 @@
 npm install        # electron 二进制慢可加：ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/
 npm run dev        # 开发模式（HMR）
 npm run typecheck  # 类型检查
-npm run build      # 产出 out/（打包分发 = M6，待 electron-builder）
+npm run build      # 产出 out/（打包分发 = M6）
 ```
+
+独立验证工具：`npm run test:asr` / `node tools/test-diarization.mjs` / `node tools/test-pipeline.mjs`（后者为分轨+转写端到端，`ELECTRON_RUN_AS_NODE=1 npx electron tools/test-pipeline.mjs` 可在 Electron 运行时验证）。`ECHO_POD_E2E=1 npm start` 走同步+转写全链路自动跑批（无 UI，全量入队）。
 
 ## 用 U 盘模拟录音豆
 
@@ -38,7 +40,7 @@ U盘根目录/
 | 里程碑 | 状态 |
 |--------|------|
 | M1 脚手架 + 主窗口 + 设备/录音 UI | ✅ |
-| M2 设备检测 + 同步 | ✅（chokidar 监听 /Volumes + .echo-pod 认亲 + 竞态防护：.part 临时文件 + rename） |
+| M2 设备检测 + 同步 | ✅ | 2s 轮询 `/Volumes`（无 watcher，不阻碍磁盘推出）+ `.echo-pod` 认亲 + 竞态防护：.part 临时文件 + rename |
 | M0/M4 ASR | ✅ **SenseVoice Small int8 真转写已接入**（sherpa-onnx-node，`say` 合成语音实测正确，2.8s 音频解码 61ms） |
 | M3 归档 + 检索 | ✅ 文件名 + 转写全文搜索（JSON store；SQLite/FTS5 如需再升级） |
 | M5 声纹分轨 | ✅ pyannote 分割 + 3dspeaker eres2net embedding + 聚类；官方 4 说话人测试音频分轨正确，输出 "[说话人 N] 文本" 格式 |
@@ -54,7 +56,20 @@ U盘根目录/
 
 **降级链**：ASR 模型缺失 → 占位转写；分轨模型缺失 → 整段转写不分说话人。
 
-**独立验证工具**：`npm run test:asr` / `npm run test:diarization` / `npm run test:pipeline`（后者为分轨+转写端到端，`ELECTRON_RUN_AS_NODE=1 npx electron tools/test-pipeline.mjs` 可在 Electron 运行时验证）。
+## 转写交互模型（v2，2026-08-18）
+
+同步不再自动转写。全链路：**同步完成 → 弹确认框（按天分组勾选，默认全选）→ 勾选的进入统一转写队列 → 设备卡常备行显示进度**。要点：
+
+- **统一队列**：同步确认、设备卡"批量转写"、单条"重新转写"都汇入同一队列（去重入队；排队期间被删除的自动跳过）；队列快照 `TranscribeJob` 随 state 推送
+- **不维护待转写积压**：未勾选的不再提示；后续想转走"批量转写"（按天分组，含上次失败）
+- **worker 死亡自愈**：转写 worker 异常退出时 reject 全部在途请求并重启（连续 2 次死亡回落主进程同步转写）——修复此前"队列卡死、手动转写无反应"的 bug
+- **设备卡转写常备行**：转写中显示 `x/y · 文件名` + 进度条 + 停止；无任务显示"当前无转写任务"
+
+## 录音库视图
+
+- **按条**：按天分组的录音列表（折叠/移除当天），点击行开右侧详情栏（28→34rem 宽）
+- **按天**：一天一行，点击开侧边栏整读当日对话文稿。块头右侧：微型播放器（进度条/时间仅播放中显示）+ 重新转写 + 删除（两步确认）
+- **有效文稿判定**：去说话人标签后实质字符（汉字/字母/数字）≥2 才算——空白/噪音录音的转写常是零散标点（`· 。`）或单个字母（`I.`）
 
 ## 已知事项
 
@@ -70,12 +85,16 @@ U盘根目录/
 src/
 ├── main/               主进程
 │   ├── index.ts        窗口生命周期
-│   ├── devices.ts      设备检测（/Volumes + .echo-pod 契约）
-│   ├── sync.ts         同步（拷贝 + .part 原子写入 + WAV 时长解析）
-│   ├── transcribe.ts   转写管线（当前占位，M0/M4 换 sherpa-onnx-node）
+│   ├── devices.ts      设备检测（2s 轮询 /Volumes + .echo-pod 契约，无 watcher）
+│   ├── sync.ts         同步（拷贝 + .part 原子写入 + WAV 时长解析；完成后推送转写确认事件）
+│   ├── transcribe.ts   转写队列（统一入口、去重/跳过已删、TranscribeJob 进度快照）
+│   ├── asr.ts          转写引擎（sherpa-onnx worker 线程，死亡自愈；回落主进程同步转写）
 │   ├── state.ts        状态 + 持久化（全量快照经 IPC 推送渲染层）
+│   ├── ipc.ts / settings.ts / media.ts / wav.ts / e2e.ts
 │   └── demo.ts         演示设备播种
 ├── preload/            contextBridge IPC 桥
-├── renderer/           React UI（单列布局：设备信息卡内下拉切换设备 + 同步区 + 录音列表/文稿/搜索）
+├── renderer/           React UI（设备卡：状态/转写常备行/批量转写/同步区；录音列表按条/按天双视图；
+│   │                   侧边栏：单条详情 RecordingDetail / 当日文稿 DayDetail）
+│   └── components/TranscribeSelectDialog（同步确认与批量转写共用的按天分组勾选弹框）
 └── shared/types.ts     主进程 ↔ 渲染层共享类型
 ```

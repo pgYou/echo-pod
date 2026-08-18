@@ -14,7 +14,7 @@ interface Props {
   onDelete: () => void
 }
 
-/** 右侧详情栏：顶天立地，独立滚动。宽度 0↔28rem 缓动展开/收起，内容定宽防挤压 */
+/** 右侧详情栏：顶天立地，独立滚动。宽度 0↔34rem 缓动展开/收起，内容定宽防挤压 */
 export default function RecordingDetail({ recording, open, onClose, onDelete }: Props): React.JSX.Element {
   const lastRef = useRef<RecordingMeta | null>(null)
   if (recording) lastRef.current = recording
@@ -25,13 +25,13 @@ export default function RecordingDetail({ recording, open, onClose, onDelete }: 
     <aside
       className={cn(
         'h-full shrink-0 overflow-hidden rounded-l-2xl bg-card transition-[width,border-color] duration-300 ease-in-out',
-        open ? 'w-[28rem] border-l' : 'w-0 border-transparent'
+        open ? 'w-[34rem] border-l' : 'w-0 border-transparent'
       )}
     >
       {/* 内层定宽：宽度动画期间内容不重排 */}
       <div
         className={cn(
-          'flex h-full w-[28rem] flex-col transition-opacity duration-200',
+          'flex h-full w-[34rem] flex-col transition-opacity duration-200',
           open ? 'opacity-100 delay-100' : 'opacity-0'
         )}
       >

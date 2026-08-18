@@ -15,7 +15,6 @@ import {
   takeArchivedTranscript
 } from './state'
 import { parseWavDuration } from './wav'
-import { enqueueTranscribe } from './transcribe'
 
 export async function syncDevice(serial: string): Promise<number> {
   if (getSync()) throw new Error('已有同步任务进行中')
@@ -66,10 +65,11 @@ export async function syncDevice(serial: string): Promise<number> {
     emitState()
   }
 
-  // 同步完成 → 自动转写。量大时（预估超 10 分钟）先推送预览，由用户勾选后转写
-  const EST_SEC_PER_AUDIO_SEC = 0.15 // 实测定标：57s 音频全管线约 8s（≈0.14）+ 每文件开销
-  const estimatedSec = synced.reduce((sum, r) => sum + (r.durationSec ?? 60) * EST_SEC_PER_AUDIO_SEC, 0)
-  if (estimatedSec > 600) {
+  // 同步完成 → 推送确认弹框：用户勾选后才入转写队列。未勾选的不再提示、不维护待转写积压
+  // （后续想转写走设备卡「批量转写」）。e2e 模式无 UI，由 e2e.ts 自行全量入队。
+  if (synced.length > 0) {
+    const EST_SEC_PER_AUDIO_SEC = 0.15 // 实测定标：57s 音频全管线约 8s（≈0.14）+ 每文件开销
+    const estimatedSec = synced.reduce((sum, r) => sum + (r.durationSec ?? 60) * EST_SEC_PER_AUDIO_SEC, 0)
     for (const win of BrowserWindow.getAllWindows()) {
       win.webContents.send('sync-batch-preview', {
         serial,
@@ -83,9 +83,6 @@ export async function syncDevice(serial: string): Promise<number> {
         }))
       })
     }
-    // 未勾选/未确认的部分保持 pending，可从设备卡「继续转写」恢复
-  } else {
-    enqueueTranscribe(synced)
   }
   return synced.length
 }

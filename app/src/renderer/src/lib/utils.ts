@@ -29,10 +29,11 @@ export function formatDate(iso: string): string {
 
 /**
  * 有效文稿判定：去掉说话人标签（[名字]/[说话人 N]，标签是元数据不算内容）后，
- * 仍含汉字/字母/数字才算有实质文本。噪音录音的空转写常是零散标点（"· 。"之类），
- * 仅 trim 判空挡不住。
+ * 标点空白不算，实质字符（汉字/字母/数字）需 ≥2 个。
+ * 噪音/空白录音的空转写常是零散标点（"· 。"）或单个字母（"I."）——只判"有无"挡不住，需数个数。
  */
 export function hasMeaningfulText(text?: string | null): boolean {
   if (!text) return false
-  return /[\p{L}\p{N}]/u.test(text.replace(/\[[^\]]*\]/g, ''))
+  const chars = text.replace(/\[[^\]]*\]/g, ' ').match(/[\p{L}\p{N}]/gu)
+  return chars != null && chars.length >= 2
 }

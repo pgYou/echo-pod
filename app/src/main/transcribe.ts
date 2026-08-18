@@ -2,31 +2,30 @@
 import path from 'node:path'
 import fs from 'node:fs'
 import type { RecordingMeta } from '../shared/types'
-import { addVoiceprint, emitState, getRecordings, getVoiceprints, recordingsRoot, touchVoiceprint, voiceprintsRoot } from './state'
+import { addVoiceprint, emitState, getRecordings, getVoiceprints, recordingsRoot, setTranscribeJob, touchVoiceprint, voiceprintsRoot } from './state'
 import { scanVolumes } from './devices'
 import { asrAvailable, transcribeWithSpeakersAsync, writeDemoWav } from './asr'
 
 const queue: RecordingMeta[] = []
 let running = false
 let stopRequested = false
+/** 本次运行已完成的条数（进度分母 = 已完成 + 队列剩余 + 当前 1） */
+let processed = 0
 
 export function enqueueTranscribe(recordings: RecordingMeta[]): void {
   stopRequested = false
-  queue.push(...recordings)
+  for (const rec of recordings) {
+    // 去重：已在队列或转写中的不再入队（否则批量入口与单条入口叠加会重复转写）
+    if (rec.transcribe.status === 'transcribing' || queue.includes(rec)) continue
+    queue.push(rec)
+  }
   void runQueue()
 }
 
-/** 停止转写：当前这条跑完后停，剩余保持 pending（可恢复） */
+/** 停止转写：当前这条跑完后停，队列清空 */
 export function stopTranscribe(): void {
   stopRequested = true
   queue.length = 0
-}
-
-/** 恢复转写：把该设备所有 pending 的录音重新入队 */
-export function resumeTranscribe(serial: string): number {
-  const recs = getRecordings(serial).filter((r) => r.transcribe.status === 'pending')
-  if (recs.length > 0) enqueueTranscribe(recs)
-  return recs.length
 }
 
 async function runQueue(): Promise<void> {
@@ -35,7 +34,15 @@ async function runQueue(): Promise<void> {
   while (queue.length > 0) {
     if (stopRequested) break
     const rec = queue.shift()!
+    // 排队期间被用户删除的录音：直接跳过（文件已删、元数据已移出 state，再跑只会报错）
+    if (!getRecordings(rec.serial).some((r) => r.id === rec.id)) continue
     rec.transcribe = { status: 'transcribing', startedAt: new Date().toISOString() }
+    setTranscribeJob({
+      serial: rec.serial,
+      done: processed,
+      total: processed + queue.length + 1,
+      currentFile: rec.fileName
+    })
     emitState()
     try {
       const text = await transcribeOne(rec)
@@ -53,9 +60,12 @@ async function runQueue(): Promise<void> {
         finishedAt: new Date().toISOString()
       }
     }
+    processed++
     emitState()
   }
   running = false
+  processed = 0
+  setTranscribeJob(null)
   // 转写完成后刷新设备待同步数（若设备还插着）
   scanVolumes()
 }

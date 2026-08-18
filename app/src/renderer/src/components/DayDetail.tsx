@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
-import { CalendarDays, Pause, Play, X } from 'lucide-react'
+import { toast } from 'sonner'
+import { CalendarDays, Pause, Play, RefreshCcw, Trash2, X } from 'lucide-react'
 import type { RecordingMeta } from '../../../shared/types'
-import { cn, hasMeaningfulText } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { cn, formatDuration, hasMeaningfulText } from '@/lib/utils'
 
 /** 有效文稿：已转写完成且有实质文本（去标点/标签后仍有汉字字母数字——噪音录音常转出零散标点） */
 function hasText(r: RecordingMeta): boolean {
@@ -27,16 +30,29 @@ function podSrc(rec: RecordingMeta): string {
     .join('/')}`
 }
 
-/** 块右上角微型播放器：圆钮播放/暂停 + 细进度条（rAF 刷新，点击进度条跳转） */
-function MiniPlayer({ src, onPlayStart }: { src: string; onPlayStart: (audio: HTMLAudioElement) => void }): React.JSX.Element {
+/** 块头微型播放器：进度条 + 时间（仅播放中显示）+ 播放钮。进度条可点击跳转，rAF 刷新 */
+function MiniPlayer({
+  src,
+  fallbackDuration,
+  onPlayStart
+}: {
+  src: string
+  fallbackDuration?: number
+  onPlayStart: (audio: HTMLAudioElement) => void
+}): React.JSX.Element {
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const trackRef = useRef<HTMLDivElement | null>(null)
   const [playing, setPlaying] = useState(false)
-  const [ratio, setRatio] = useState(0)
+  const [current, setCurrent] = useState(0)
+  const [duration, setDuration] = useState(0)
+
+  // 有效总时长：audio 元素的为准，无效（0/∞）时用元数据兜底
+  const total = duration > 0 ? duration : (fallbackDuration ?? 0)
 
   useEffect(() => {
     setPlaying(false)
-    setRatio(0)
+    setCurrent(0)
+    setDuration(0)
     if (audioRef.current) audioRef.current.currentTime = 0
   }, [src])
 
@@ -45,7 +61,7 @@ function MiniPlayer({ src, onPlayStart }: { src: string; onPlayStart: (audio: HT
     let raf = 0
     const tick = (): void => {
       const a = audioRef.current
-      if (a && a.duration > 0 && Number.isFinite(a.duration)) setRatio(Math.min(a.currentTime / a.duration, 1))
+      if (a) setCurrent(a.currentTime)
       raf = requestAnimationFrame(tick)
     }
     raf = requestAnimationFrame(tick)
@@ -64,12 +80,14 @@ function MiniPlayer({ src, onPlayStart }: { src: string; onPlayStart: (audio: HT
   const seek = (e: React.PointerEvent<HTMLDivElement>): void => {
     const el = trackRef.current
     const a = audioRef.current
-    if (!el || !a || !a.duration || !Number.isFinite(a.duration)) return
+    if (!el || !a || total <= 0) return
     const rect = el.getBoundingClientRect()
     const r = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width))
-    a.currentTime = r * a.duration
-    setRatio(r)
+    a.currentTime = r * total
+    setCurrent(r * total)
   }
+
+  const ratio = total > 0 ? Math.min(current / total, 1) : 0
 
   return (
     <div className="flex items-center gap-2">
@@ -80,19 +98,103 @@ function MiniPlayer({ src, onPlayStart }: { src: string; onPlayStart: (audio: HT
         onPlay={() => setPlaying(true)}
         onPause={() => setPlaying(false)}
         onEnded={() => setPlaying(false)}
+        onLoadedMetadata={(e) => {
+          const d = e.currentTarget.duration
+          setDuration(Number.isFinite(d) ? d : 0)
+        }}
       />
+      {playing && (
+        <>
+          <div ref={trackRef} className="relative h-3 w-20 shrink-0 cursor-pointer" onPointerDown={seek}>
+            <div className="absolute top-1/2 h-1 w-full -translate-y-1/2 rounded-full bg-muted" />
+            <div
+              className="absolute top-1/2 h-1 -translate-y-1/2 rounded-full bg-primary"
+              style={{ width: `${ratio * 100}%` }}
+            />
+          </div>
+          <span className="shrink-0 font-mono text-xs text-muted-foreground tabular-nums">
+            {formatDuration(current) || '0:00'}/{formatDuration(total) || '--:--'}
+          </span>
+        </>
+      )}
       <button
         onClick={toggle}
         className="flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-full outline-none transition-colors hover:bg-accent"
         aria-label={playing ? '暂停' : '播放'}
       >
-        {playing ? <Pause className="size-3" /> : <Play className="size-3 translate-x-[0.5px]" />}
+        {playing ? <Pause className="size-3" /> : <Play className="size-3 translate-x-[1px]" />}
       </button>
-      <div ref={trackRef} className="relative h-3 w-20 cursor-pointer" onPointerDown={seek}>
-        <div className="absolute top-1/2 h-1 w-full -translate-y-1/2 rounded-full bg-muted" />
-        <div className="absolute top-1/2 h-1 -translate-y-1/2 rounded-full bg-primary" style={{ width: `${ratio * 100}%` }} />
-      </div>
     </div>
+  )
+}
+
+/** 单条录音块：头部（时间 + 重新转写/删除 + 微型播放器）+ 文稿。删除两步确认 */
+function RecordingBlock({ rec, onPlayStart }: { rec: RecordingMeta; onPlayStart: (audio: HTMLAudioElement) => void }): React.JSX.Element {
+  const [confirmOpen, setConfirmOpen] = useState(false)
+
+  useEffect(() => {
+    setConfirmOpen(false)
+  }, [rec.id])
+
+  const retranscribe = (): void => {
+    void window.api
+      .transcribeOne(rec.serial, rec.id)
+      .then(() => toast.success(`已加入转写队列：${rec.fileName}`))
+      .catch((err: unknown) => toast.error(err instanceof Error ? err.message : String(err)))
+  }
+
+  const del = (): void => {
+    setConfirmOpen(false)
+    void window.api.deleteRecordings(rec.serial, [rec.id])
+  }
+
+  return (
+    <section className="rounded-xl border bg-white p-4">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <span className="font-mono text-xs text-muted-foreground">{timeLabel(rec)}</span>
+        {/* 右侧按钮区：微型播放器（进度条/时间仅播放中显示，播放钮常驻）+ 重新转写 + 删除 */}
+        <span className="flex shrink-0 items-center gap-0.5">
+          <span className="mr-1 flex items-center">
+            <MiniPlayer src={podSrc(rec)} fallbackDuration={rec.durationSec} onPlayStart={onPlayStart} />
+          </span>
+          <button
+            onClick={retranscribe}
+            className="cursor-pointer rounded-md p-1 text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground"
+            aria-label="重新转写"
+            title="重新转写"
+          >
+            <RefreshCcw className="size-3.5" />
+          </button>
+          <Popover open={confirmOpen} onOpenChange={setConfirmOpen}>
+            <PopoverTrigger asChild>
+              <button
+                onClick={() => setConfirmOpen((v) => !v)}
+                className={cn(
+                  'cursor-pointer rounded-md p-1 outline-none transition-colors hover:bg-accent hover:text-destructive',
+                  confirmOpen ? 'text-destructive' : 'text-muted-foreground'
+                )}
+                aria-label="删除录音"
+                title="删除录音"
+              >
+                <Trash2 className="size-3.5" />
+              </button>
+            </PopoverTrigger>
+            <PopoverContent side="top" align="end" className="w-auto p-3">
+              <p className="text-xs">删除这条录音？（设备上的原始文件不受影响）</p>
+              <div className="mt-2.5 flex justify-end gap-2">
+                <Button variant="ghost" size="xs" onClick={() => setConfirmOpen(false)}>
+                  取消
+                </Button>
+                <Button variant="destructive" size="xs" onClick={del}>
+                  确认删除
+                </Button>
+              </div>
+            </PopoverContent>
+          </Popover>
+        </span>
+      </div>
+      <p className="whitespace-pre-wrap text-sm leading-relaxed">{rec.transcribe.text}</p>
+    </section>
   )
 }
 
@@ -127,13 +229,13 @@ export default function DayDetail({ day, recordings, open, onClose }: Props): Re
     <aside
       className={cn(
         'h-full shrink-0 overflow-hidden rounded-l-2xl bg-card transition-[width,border-color] duration-300 ease-in-out',
-        open ? 'w-[28rem] border-l' : 'w-0 border-transparent'
+        open ? 'w-[34rem] border-l' : 'w-0 border-transparent'
       )}
     >
       {/* 内层定宽：宽度动画期间内容不重排 */}
       <div
         className={cn(
-          'flex h-full w-[28rem] flex-col transition-opacity duration-200',
+          'flex h-full w-[34rem] flex-col transition-opacity duration-200',
           open ? 'opacity-100 delay-100' : 'opacity-0'
         )}
       >
@@ -163,13 +265,7 @@ export default function DayDetail({ day, recordings, open, onClose }: Props): Re
             </div>
           ) : (
             valid.map((rec) => (
-              <section key={rec.id} className="rounded-xl border bg-white p-4">
-                <div className="mb-2 flex items-center justify-between gap-2">
-                  <span className="font-mono text-xs text-muted-foreground">{timeLabel(rec)}</span>
-                  <MiniPlayer src={podSrc(rec)} onPlayStart={handlePlayStart} />
-                </div>
-                <p className="whitespace-pre-wrap text-sm leading-relaxed">{rec.transcribe.text}</p>
-              </section>
+              <RecordingBlock key={rec.id} rec={rec} onPlayStart={handlePlayStart} />
             ))
           )}
         </div>

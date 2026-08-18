@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react'
-import { Toaster } from 'sonner'
+import { toast, Toaster } from 'sonner'
 import type { AppState, ViewMode } from '../../shared/types'
 import DayDetail from './components/DayDetail'
 import DevicePanel from './components/DevicePanel'
 import RecordingDetail from './components/RecordingDetail'
 import TitleBar from './components/TitleBar'
-import TranscribePreviewDialog, { type SyncBatchPreview } from './components/TranscribePreviewDialog'
+import TranscribeSelectDialog, { formatEstimate, type SyncBatchPreview } from './components/TranscribeSelectDialog'
 
 export default function App(): React.JSX.Element {
   const [state, setState] = useState<AppState | null>(null)
@@ -103,7 +103,7 @@ export default function App(): React.JSX.Element {
           )}
         </main>
 
-        {/* 右侧详情栏：常驻挂载，宽度 0↔28rem 缓动展开/收起。按条视图 = 单条详情；按天视图 = 当日对话文稿 */}
+        {/* 右侧详情栏：常驻挂载，宽度 0↔34rem 缓动展开/收起。按条视图 = 单条详情；按天视图 = 当日对话文稿 */}
         {viewMode === 'days' ? (
           <DayDetail
             day={selectedDay}
@@ -125,7 +125,26 @@ export default function App(): React.JSX.Element {
           />
         )}
       </div>
-      <TranscribePreviewDialog batch={syncBatch} onClose={() => setSyncBatch(null)} />
+
+      {/* 同步完成后的转写确认：勾选的入队，未勾选的不再提示（后续走设备卡「批量转写」） */}
+      <TranscribeSelectDialog
+        open={syncBatch != null}
+        onClose={() => setSyncBatch(null)}
+        title="转写确认"
+        description={
+          syncBatch
+            ? `本次同步 ${syncBatch.items.length} 条录音，全部转写预计 ${formatEstimate(syncBatch.estimatedSec)}。只转写勾选的，未勾选的可稍后从设备卡「批量转写」选择。`
+            : ''
+        }
+        items={syncBatch?.items ?? []}
+        onConfirm={(ids) => {
+          const batch = syncBatch
+          setSyncBatch(null)
+          if (batch && ids.length > 0) {
+            void window.api.transcribeSelected(batch.serial, ids).then((n) => toast.success(`开始转写 ${n} 条`))
+          }
+        }}
+      />
       <Toaster
         position="bottom-center"
         toastOptions={{
