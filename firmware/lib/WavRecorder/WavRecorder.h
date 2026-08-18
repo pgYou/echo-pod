@@ -1,8 +1,7 @@
 #pragma once
 #include <Arduino.h>
 #include <ESP_I2S.h>
-#include <SD.h>
-#include <SPI.h>
+#include <cstdio>
 #include "VadTrigger.h"
 #include "RingBuffer.h"
 
@@ -48,9 +47,23 @@ public:
 
   // 硬件 / 路径 / 时长配置
   struct HardwareConfig {
+    // ---- 音频后端 ----
+    // useEs8311=true: 微雪 ESP32-S3-ePaper-1.54 板载 ES8311（I2C+I2S STD，2.0 硬件）
+    // useEs8311=false: XIAO PDM 麦（1.0 硬件，pdmClkPin/pdmDataPin 生效）
+    bool useEs8311 = false;
     // PDM 麦（XIAO ESP32-S3 Sense 扩展板 MSA261，探针实证 CLK=42 DATA=41）
     int pdmClkPin = 42;
     int pdmDataPin = 41;
+    // ES8311（微雪板，引脚官方定案，见 interaction-design.md §1）
+    int esI2cSda = 47, esI2cScl = 48;
+    int esI2sMck = 14, esI2sBck = 15, esI2sLrck = 38, esI2sDataIn = 16;
+    int esI2sDataOut = 45;  // ESP32→codec（配置齐全，即使录音不发送
+    // ---- 存储后端 ----
+    // useSdMmc=true: SD_MMC 1-bit（微雪板 SDIO CLK=39 CMD=41 D0=40）
+    // useSdMmc=false: SPI SD（XIAO 1.0，sdCsPin 等生效）
+    bool useSdMmc = false;
+    // SD_MMC 引脚（GPIO 矩阵）。微雪板非默认 IOMUX，必须显式指定；-1 = 库默认
+    int sdMmcClk = -1, sdMmcCmd = -1, sdMmcD0 = -1;
     // SD 卡（SPI，CS=GPIO21 探针实证 — 一脚两用 USER_LED，访问时橙灯闪）
     int sdCsPin = 21;
     int sdSckPin = 7;
@@ -58,10 +71,11 @@ public:
     int sdMosiPin = 9;
     // 音频（VADNet 要求 16kHz）
     int sampleRate = 16000;
-    // SD 卡文件组织：外层目录（日期子目录在其下自动建）
+    // SD 卡文件组织（日期子目录自动建在其下）。SD_MMC 后端须写全路径含挂载点
     const char *recordDir = "/echo-pod";
-    // 预录缓冲容量（字节）。32KB ≈ 1 秒（16k mono 16bit）
-    size_t ringBytes = 32 * 1024;
+    // 预录缓冲容量（字节）。64KB ≈ 2s（16k mono 16bit）
+    // 比触发延迟（~180ms）大一个数量级，触发慢也不丢首音
+    size_t ringBytes = 64 * 1024;
     // 单段最长录音（防异常长录占用）。0 = 不限
     uint32_t maxRecordMs = 300000; // 默认 5 分钟
     // 录音短于此则删除文件（误触发 / SD 写入异常产生的垃圾文件，避免污染 SD
@@ -80,6 +94,15 @@ public:
   // 主循环步进。在 Arduino loop() 里反复调用，非阻塞。
   void step();
 
+  // ---- 运行控制（PodController 调用）----
+  // 手动切段：强制收尾当前段并归档；预滚缓冲保留（新段开头与上段尾部 ~2s 重叠，
+  // 切点不丢话）。VAD 仍激活则下一帧自动开新段继续录（"短按归档"语义）。
+  void splitSegment() { stopRecording(true); }
+  // 暂停/恢复监听（USB 同步等场景）：暂停期间音频照读但丢弃（防 I2S 积压陈旧数据）
+  void setPaused(bool p) { paused_ = p; }
+
+
+
   // ---- 回调 ----
   void onStateChange(StateCallback cb) { stateCb_ = cb; }
   void onError(ErrorCallback cb) { errorCb_ = cb; }
@@ -89,6 +112,8 @@ public:
   uint32_t getRecordMs() const { return recordMs_; }
   uint32_t getDataBytes() const { return dataBytes_; }
   float getVadScore() const { return vad_.getScore(); }
+  // 最近一帧原始音频峰值（0..32767）。音频链路自检：peak=0 → I2S 无数据；peak>0 而 score=0 → VAD 层问题
+  int getLastFramePeak() const { return framePeak_; }
   uint32_t getVadLowMs() const { return vad_.getLowMs(); }
   const VadTrigger::Params &getVadParams() const { return vad_.getParams(); }
   const char *getCurrentPath() const { return currentPath_.c_str(); }
@@ -101,23 +126,25 @@ private:
   State state_ = State::IDLE;
   bool begun_ = false;
 
-  File wavFile_;
+  FILE *wavFile_ = nullptr;  // POSIX（存储层与 arduino SD_MMC 库解耦，走 IDF VFS）
   uint32_t dataBytes_ = 0; // 当前文件已写 PCM 字节
   uint32_t recordMs_ = 0;  // 当前已录时长（ms）
   String currentPath_;
 
   StateCallback stateCb_ = nullptr;
   ErrorCallback errorCb_ = nullptr;
+  bool paused_ = false;
 
   int frameSamples_ = 0;   // 每帧样本数（= sampleRate/1000*frameMs）
   int frameBytes_ = 0;     // 每帧字节数（= frameSamples*2）
   int16_t *frameBuf_ = nullptr;
+  int framePeak_ = 0;
   int writeFailCount_ = 0; // 连续写入失败计数（容忍偶发，累计才停）
 
   void notifyState(State s);
   void notifyError(const char *msg);
   void startRecording();
-  void stopRecording();
+  void stopRecording(bool keepRing = false);  // keepRing: 手动切段保留预滚（重叠衔接）
   void buildPath(String &folder, String &fname);
   void writeWavHeader();
   void finalizeWav();
