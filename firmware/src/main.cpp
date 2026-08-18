@@ -278,8 +278,13 @@ void setup() {
   todayCount = countTodayWavs();  // 跨重启续算今日段数
   pod::log::event("[sd] 今日已归档 %d 段（从卡恢复）\n", todayCount);
 
-  // 串口校时通道（电脑可发 "SETTIME:<unix秒>\n"；RTC 直读已为主源，此为校准入口）
+  // 串口校时通道（电脑可发 "SETTIME:<unix秒>\n"）→ 写入 PCF85063 芯片 + 系统时钟 + 刷屏
   timeSync.begin(Serial, "CST-8");
+  timeSync.onSynced([](time_t ts) {
+    pod::rtcSet(ts);
+    pod::log::event("[rtc] 校时完成（串口 SETTIME → 芯片 + 系统时钟）\n");
+    renderPage();
+  });
 
   battery = pod::batterySample();
   pod::log::event("[bat] 首采 %.2fV %d%%%s\n", battery.volts, battery.pct,

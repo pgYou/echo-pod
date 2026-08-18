@@ -219,14 +219,16 @@ static void rtcWrite(const RtcTime &t) {
 }
 
 static time_t rtcToUnix(const RtcTime &t) {
-  struct tm ti = {};
-  ti.tm_year = 2000 + t.y - 1900;
-  ti.tm_mon = t.mo - 1;
-  ti.tm_mday = t.d;
-  ti.tm_hour = t.h;
-  ti.tm_min = t.mi;
-  ti.tm_sec = t.s;
-  return mktime(&ti);  // 本地时区（TZ 由 TimeSync 设定）
+  // Howard Hinnant days_from_civil + 显式东八区偏移：不依赖 TZ 环境变量初始化顺序
+  // （v0.1.0 踩坑：mktime 在 TimeSync 设 TZ 前调用，系统时间/录音文件名全错到 0 点）
+  int y = 2000 + t.y, m = t.mo, d = t.d;
+  y -= m <= 2;
+  const int era = (y >= 0 ? y : y - 399) / 400;
+  const unsigned yoe = (unsigned)(y - era * 400);
+  const unsigned doy = (153u * (m + (m > 2 ? -3 : 9)) + 2) / 5 + (unsigned)d - 1;
+  const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+  long days = (long)era * 146097 + (long)doe - 719468;
+  return (time_t)days * 86400 + t.h * 3600 + t.mi * 60 + t.s - 8 * 3600;
 }
 
 static void setSystemTime(time_t ts) {
@@ -238,9 +240,9 @@ static void setSystemTime(time_t ts) {
 
 void rtcSet(time_t unixSec) {
   if (!rtcPresent_) return;
-  time_t ts = unixSec;
+  time_t local = unixSec + 8 * 3600;  // 东八区墙钟（UTC + 偏移，gmtime_r 无 TZ 依赖）
   struct tm ti;
-  localtime_r(&ts, &ti);
+  gmtime_r(&local, &ti);
   RtcTime t;
   t.y = ti.tm_year + 1900 - 2000;
   t.mo = ti.tm_mon + 1;
@@ -249,7 +251,7 @@ void rtcSet(time_t unixSec) {
   t.mi = ti.tm_min;
   t.s = ti.tm_sec;
   rtcWrite(t);
-  setSystemTime(ts);  // system time 同步（文件命名来源）
+  setSystemTime(unixSec);  // system time 同步（录音文件命名来源）
 }
 
 bool rtcBegin() {
