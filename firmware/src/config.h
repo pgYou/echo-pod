@@ -9,7 +9,7 @@
  */
 
 // ---- 版本（正式固件唯一权威，串口横幅 / .echo-pod fw 字段同源）----
-#define FW_VERSION "0.1.0"
+#define FW_VERSION "0.1.1"
 #define FW_NAME "echo-pod"
 #define HW_ID "waveshare-epaper-1.54-v2"
 

@@ -1,7 +1,7 @@
 /**
  * 录音豆 echo-pod 正式固件
  * ============================================================
- * v0.1.0 · 2026-08-17 · 微雪 ESP32-S3-ePaper-1.54（V2，N8R8，黑白屏）
+ * v0.1.1 · 2026-08-18 · 微雪 ESP32-S3-ePaper-1.54（V2，N8R8，黑白屏）
  *
  * 组装：WavRecorder（VAD 自动录音，ES8311 + SD_MMC 后端）
  *     + pod_board（电源闩锁/绿灯/电池/按键/RTC）
@@ -126,7 +126,7 @@ static void onRecorderState(WavRecorder::State s) {
                   (unsigned long)bytes, recorder.getRecordMs() / 1000.0,
                   recorder.getVadScore(), (unsigned)recorder.getVadLowMs(),
                   valid ? "(归档)" : "(过短已删)");
-    if (mode == PodMode::NORMAL && !muted) pod::setLed(pod::Led::OFF);  // 回监听灭灯
+    if (mode == PodMode::NORMAL) pod::setLed(pod::Led::OFF);  // 回监听灭灯（含静音收尾切段；MUTED 态灯=灭，§7）
   }
   renderPage();  // 段落切换刷屏（RECORDING↔STANDBY / 切段后新段号）
 }
@@ -340,7 +340,7 @@ void loop() {
         if (muted && recorder.getState() == WavRecorder::State::RECORDING)
           recorder.splitSegment();  // 静音前收尾
         renderPage();
-        Serial.println(muted ? "[key] 静音（已暂停）" : "[key] 恢复监听");
+        pod::log::event("[key] BOOT 长按 → %s\n", muted ? "静音（已暂停）" : "恢复监听");
       }
       break;
     case pod::KeyEvent::BOOT_HOLD5S:
