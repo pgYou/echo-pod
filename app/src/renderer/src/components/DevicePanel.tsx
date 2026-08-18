@@ -291,17 +291,7 @@ export default function DevicePanel({
             <div className="mb-3 flex items-center justify-between gap-3">
               <div className="flex items-center gap-2">
                 <h2 className="text-sm font-semibold">录音</h2>
-                {viewMode === 'items' && dayGroups.length > 0 && (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-7 px-2 text-xs text-muted-foreground"
-                    onClick={toggleAllDays}
-                  >
-                    {allCollapsed ? <ChevronsUpDown /> : <ChevronsDownUp />}
-                    {allCollapsed ? '展开全部' : '收起全部'}
-                  </Button>
-                )}
+
                 {/* 视图切换：按条（逐条列表）/ 按天（一天一行 → 侧边栏整读当日对话） */}
                 <div className="flex items-center rounded-md border p-0.5">
                   <button
@@ -327,6 +317,17 @@ export default function DevicePanel({
                     按天
                   </button>
                 </div>
+                {viewMode === 'items' && dayGroups.length > 0 && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 px-2 text-xs text-muted-foreground"
+                    onClick={toggleAllDays}
+                  >
+                    {allCollapsed ? <ChevronsUpDown /> : <ChevronsDownUp />}
+                    {allCollapsed ? '展开全部' : '收起全部'}
+                  </Button>
+                )}
               </div>
               <div className="relative w-64">
                 <Search className="absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
