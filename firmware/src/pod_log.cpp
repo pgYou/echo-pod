@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 #include <dirent.h>
 #include <sys/stat.h>
 
@@ -82,7 +83,11 @@ void event(const char *fmt, ...) {
     strftime(ts, sizeof(ts), "%H:%M:%S ", &ti);
     fputs(ts, logFile_);
     fputs(buf, logFile_);
-    fflush(logFile_);  // 事件级低频，立即落盘防掉电丢
+    fflush(logFile_);
+    // fflush 只把 newlib 缓冲刷到 FatFS 内存缓存，FAT 目录项（文件长度）不更新，
+    // 断电后日志归零——8-18/8-20 两个 0 字节日志即此（8-19 有内容属写入量运气）。
+    // fsync 经 VFS 映射到 f_sync，数据+目录项真正落盘
+    fsync(fileno(logFile_));
   }
 }
 

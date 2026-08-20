@@ -95,10 +95,11 @@ void showPage(Page p, const PageInfo &info) {
       break;
     }
     case Page::ERROR_: {
-      paint.drawRect(36, 36, 128, 128, E::BLACK);
-      paint.drawRect(40, 40, 120, 120, E::BLACK);
-      paint.drawTextCenter(100, 70, "无卡或卡异常", E::BLACK);
-      paint.drawTextCenter(100, 110, "请用电脑格式化", E::BLACK);
+      // 去矩形双线框；错误可能来自 SD/I2C/音频初始化，文案不做具体归因
+      paint.fillRect(96, 44, 8, 26, E::BLACK);  // 感叹号
+      paint.fillRect(96, 82, 8, 8, E::BLACK);
+      paint.drawTextCenter(100, 116, "设备异常", E::BLACK);
+      paint.drawTextCenter(100, 148, "长按PWR键关机", E::BLACK);
       break;
     }
     case Page::SHUTDOWN: {

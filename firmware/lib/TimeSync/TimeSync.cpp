@@ -24,6 +24,8 @@ void TimeSync::update() {
       if (lineBuf_.startsWith(prefix) && lineBuf_.length() > prefixLen) {
         time_t ts = (time_t)lineBuf_.substring(prefixLen).toInt();
         sync(ts);
+      } else if (lineCb_) {
+        lineCb_(lineBuf_.c_str());  // 非 SETTIME 行转发（如 LISTEN:1/0）
       }
       lineBuf_ = "";
     } else if (c != '\r' && isPrintable(c)) {

@@ -108,6 +108,7 @@ public:
   // ---- 观测（调试 / 上层决策）----
   State getState() const { return state_; }
   float getScore() const { return score_; }          // 平滑后的语音确信度 0~1
+  float getRatio() const { return ratio_; }          // 窗口原始语音占比 0~1（包络前，调参基准）
   bool getLastRawSpeech() const { return lastRaw_; } // 上一帧 VADNet 裸判定
   uint32_t getLowMs() const { return lowMs_; }       // 当前 score<LOW 已累计 ms
   const Params &getParams() const { return params_; }
@@ -115,7 +116,8 @@ public:
 private:
   vad_handle_t vad_ = nullptr; // VADNet 实例（C 接口）
   Params params_;
-  float score_ = 0; // 包络积分值 0~1
+  float score_ = 0;  // 包络积分值 0~1
+  float ratio_ = 0;  // 窗口原始语音占比 0~1（score 的积分目标）
   State state_ = State::IDLE;
   uint32_t lowMs_ = 0;   // score<LOW 累计时长（ACTIVE 时计）
   bool lastRaw_ = false; // 上一帧 VADNet 裸判定

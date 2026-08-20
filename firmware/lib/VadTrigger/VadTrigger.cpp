@@ -15,6 +15,7 @@ bool VadTrigger::begin(const Params &params) {
   if (!vad_) return false;
 
   score_ = 0;
+  ratio_ = 0;
   state_ = State::IDLE;
   lowMs_ = 0;
   lastRaw_ = false;
@@ -41,6 +42,7 @@ void VadTrigger::end() {
 
 void VadTrigger::reset() {
   score_ = 0;
+  ratio_ = 0;
   state_ = State::IDLE;
   lowMs_ = 0;
 }
@@ -80,19 +82,19 @@ VadTrigger::State VadTrigger::process(const int16_t *samples, int n) {
   winBuf_[winHead_] = lastRaw_ ? 1 : 0;
   winSum_ += winBuf_[winHead_];
   winHead_ = (winHead_ + 1) % winSize_;
-  float ratio = (winCount_ > 0) ? (float)winSum_ / winCount_ : 0;
+  ratio_ = (winCount_ > 0) ? (float)winSum_ / winCount_ : 0;
 
   // 3. score 积分（目标改为窗口占比 ratio，而非单帧 0/1）
   //    ratio 低 → score 目标低 → 涨不起来（瞬态噪声被窗口稀释后压不上去）
   //    下降系数按状态分流：IDLE 快泄（releaseIdle，防连咳/连敲跨间隙累积
   //    垫脚）；ACTIVE 慢降（release，对话停顿 score 缓降不切段）
   float a;
-  if (ratio >= score_) {
+  if (ratio_ >= score_) {
     a = params_.attack;
   } else {
     a = (state_ == State::IDLE) ? params_.releaseIdle : params_.release;
   }
-  score_ = score_ * a + ratio * (1.0f - a);
+  score_ = score_ * a + ratio_ * (1.0f - a);
 
   // 4. 双阈值迟滞状态机
   if (state_ == State::IDLE) {

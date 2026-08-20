@@ -37,9 +37,14 @@ public:
   void formatNow(char *buf, size_t len, const char *fmt) const; // strftime 格式化
   void onSynced(SyncedCallback cb) { syncedCb_ = cb; }
 
+  // 通用行命令回调：非 SETTIME 的行原样转发（如诊断命令 LISTEN:1/0）
+  typedef void (*LineCallback)(const char *line);
+  void onLine(LineCallback cb) { lineCb_ = cb; }
+
 private:
   Stream *port_ = nullptr;
   bool synced_ = false;
   SyncedCallback syncedCb_ = nullptr;
+  LineCallback lineCb_ = nullptr;
   String lineBuf_; // 串口命令行缓冲
 };

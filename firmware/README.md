@@ -5,7 +5,7 @@
 > 本工程是独立 git 仓库，作为 submodule 嵌入 [deep-dive](https://github.com/pgYou/deep-dive) 学习项目。
 > 完整上下文（决策历程、交互设计、协议、postmortem）在 deep-dive 仓库：
 > - [项目 Journey](https://github.com/pgYou/deep-dive/blob/main/projects/recording-pod-hardware/Journey.md) · [交互设计](https://github.com/pgYou/deep-dive/blob/main/projects/recording-pod-hardware/interaction-design.md) · [设备协议](https://github.com/pgYou/deep-dive/blob/main/projects/recording-pod-hardware/device-protocol.md)
-> - **版本迭代记录：[CHANGELOG.md](CHANGELOG.md)**（当前 v0.1.3）
+> - **版本迭代记录：[CHANGELOG.md](CHANGELOG.md)**（当前 v0.1.4）
 
 ## 硬件
 
@@ -20,7 +20,7 @@
 
 ```
 firmware/
-├── platformio.ini              # 单 env：echo-pod（pioarduino platform + arduino 框架）
+├── platformio.ini              # 双 env 同一份 src：echo-pod（正式）+ echo-pod-debug（插线不进同步，调试用）
 ├── CHANGELOG.md                # 版本迭代记录（本文件平级）
 ├── src/
 │   ├── main.cpp                # PodController：状态机 + 交互矩阵分派
@@ -57,16 +57,22 @@ firmware/
 ## 烧录
 
 ```bash
-pio run -t upload --upload-port /dev/cu.usbmodem101   # 端口以实际枚举为准
+pio run -e echo-pod -t upload --upload-port /dev/cu.usbmodem101   # 正式版（插线→同步态）
+pio run -e echo-pod-debug -t upload --upload-port /dev/cu.usbmodem101   # 调试版（插线只供电+串口，录音不中断）
 pio device monitor -p /dev/cu.usbmodem101
-# 校时（monitor 中粘贴输出）：
+# 校时（monitor 中粘贴输出，两个 env 通用）：
 python3 -c "import time; print(f'SETTIME:{int(time.time())}')"
+# 正式版诊断用（debug env 不需要）：插线默认进同步态暂停录音，观测 VAD 需保持监听：
+LISTEN:1    # 挂起自动同步，插线保持监听（[vad] 心跳 5s 可见）
+LISTEN:0    # 恢复插线自动同步策略
 ```
+
+> **烧录后 I2C 总线卡死**（串口见 `SDA=0 SCL=0` / `[自检·时间] ⚠ 无芯片` / 器件探测全失败）：esptool 复位不会给外部芯片断电，总线事务半空时会被从机咬死。**长按 PWR 真断电再开机即恢复，无需重烧**（RTC 电池直供，时间不丢）。软复位无效。
 
 ## 当前状态（2026-08-20）
 
 - ✅ 设备→App 全链路闭环：VAD 录音 → SD → 读卡器 → App 识别（协议 v1.1）
 - ✅ 交互矩阵 / 七状态屏 / 绿灯 / 低电保护 / 真关机 全量实机验证
-- ⏳ v0.1.3 待烧录验证（时间链路：自检✓ → SETTIME → 文件落当日文件夹）
-- ⏳ 佩戴实测收尾：VAD 灵敏度复测（0.68/0.94）、8h 续航
+- ⏳ v0.1.4 待完整验证（时间链路：自检✓ → SETTIME → 文件落当日文件夹；VAD 抗误触：咳嗽/敲桌不触发、说话 ~1s 触发）
+- ⏳ 佩戴实测收尾：VAD 抗误触复测（窗口 32 帧方案，清单见 CHANGELOG v0.1.4）、8h 续航
 - 📋 v0.2.0：USB-MSC 块代理同步（TinyUSB 切栈）+ CDC 自动校时 + 固件内 SD 格式化

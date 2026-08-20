@@ -9,7 +9,7 @@
  */
 
 // ---- 版本（正式固件唯一权威，串口横幅 / .echo-pod fw 字段同源）----
-#define FW_VERSION "0.1.3"
+#define FW_VERSION "0.1.4"
 #define FW_NAME "echo-pod"
 #define HW_ID "waveshare-epaper-1.54-v2"
 
@@ -56,13 +56,19 @@ inline VadTrigger::Params makeVadParams() {
                               // （3 帧内 score 贴近窗口占比，触发延迟 ≈ 窗口填充时间）
   vad.release = 0.92f;        // ACTIVE 态慢降 τ≈360ms（对话间隙 score 缓降不切段）
   vad.releaseIdle = 0.75f;    // IDLE 态快泄 τ≈100ms（连咳/连敲间隙 score 掉光，不累积）
-  vad.highThreshold = 0.68f;  // 上穿 → ACTIVE（佩戴环境噪声实测易触发，0.60→0.68）
-  vad.midThreshold = 0.30f;   // >=MID 才清零 hangover（防抖动重置）
+  vad.highThreshold = 0.85f;  // 0.60→0.68→0.85：2026-08-20 [vad+] 实测——手摩擦外壳
+                              // VADNet 密度上限 ratio≈0.78（score 天花板随之 <0.8），
+                              // 佩戴说话稳态 0.91~1.00；0.85 卡在中间：摩擦永不触发、
+                              // 说话 1~2s 冲过（预滚 2s 不丢首音）。能量门已否决：
+                              // 摩擦 peak 663~3960 与说话 152~1980 重叠，无门限可设
+  vad.midThreshold = 0.55f;   // 0.30→0.55：口袋布料摩擦 score 上限 ~0.46（[vad+] 实测），
+                              // 旧值 0.30 下摩擦反复清零 hangover → 噪声尾无限拖长；
+                              // 0.55 后摩擦只"冻结"计时不清零，真静音(<low)正常收尾
   vad.lowThreshold = 0.20f;   // <LOW 累计 hangover
   vad.hangoverMs = 6000;      // lowMs 累计满 6s 才停
   vad.warmupMs = 300;         // 开机预热丢弃（codec/VADNet 瞬态）
   vad.frameWindow = 32;       // 5→32：窗口 150ms→960ms，语义从"防毛刺"升级为"语音密度"
-                              // 单声咳嗽(~15帧)占比≈0.47、长咳(20帧)≈0.63 都过不了 0.68；
+                              // 单声咳嗽(~15帧)占比≈0.47、长咳(20帧)≈0.63 过不了阈值；
                               // 真人连续说话占比≈1.0 正常触发（延迟~0.75s < 2s 预滚，不丢首音）
   return vad;
 }

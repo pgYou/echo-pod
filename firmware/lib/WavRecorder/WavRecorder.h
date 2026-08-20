@@ -112,6 +112,7 @@ public:
   uint32_t getRecordMs() const { return recordMs_; }
   uint32_t getDataBytes() const { return dataBytes_; }
   float getVadScore() const { return vad_.getScore(); }
+  float getVadRatio() const { return vad_.getRatio(); }  // 窗口原始语音占比（包络前，debug 调参）
   // 最近一帧原始音频峰值（0..32767）。音频链路自检：peak=0 → I2S 无数据；peak>0 而 score=0 → VAD 层问题
   int getLastFramePeak() const { return framePeak_; }
   uint32_t getVadLowMs() const { return vad_.getLowMs(); }
