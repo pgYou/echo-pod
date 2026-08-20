@@ -41,14 +41,17 @@ void ledTick() {
 }
 
 // ============ 电池 ============
-// 电压 → 百分比查表（interaction-design.md §8.1，锂电平台期非线性线性插值）
+// 电压 → 百分比查表（v0.1.5 重标定：4.2V 锂电 0.2C 放电曲线 + 本机现实）
+// 关键修正：0% 定在 3.60V——旧表 0%=3.00V 永远到不了（低电强制关机 ~3.6V 先发生，
+// 0~7% 是永远显示不出的死区，设备在"10%"附近就死）；平台期（3.9~3.8V）按真实
+// 曲线拉宽百分比间隔；LOWBAT 8% 现落在 ≈3.70V，断电余量更足
 static const float kV2P[][2] = {
-    {4.20f, 100}, {4.06f, 90}, {3.98f, 80}, {3.92f, 70}, {3.87f, 60}, {3.82f, 50},
-    {3.79f, 40},  {3.77f, 30}, {3.74f, 20}, {3.68f, 10}, {3.45f, 5},  {3.00f, 0}};
+    {4.20f, 100}, {4.08f, 90}, {4.00f, 80}, {3.94f, 70}, {3.89f, 60}, {3.85f, 50},
+    {3.82f, 40},  {3.79f, 30},  {3.76f, 20}, {3.72f, 10}, {3.60f, 0}};
 
 static int voltToPercent(float v) {
   if (v >= kV2P[0][0]) return 100;
-  for (int i = 0; i < 11; i++) {
+  for (int i = 0; i < 10; i++) {
     if (v >= kV2P[i + 1][0]) {
       float f = (v - kV2P[i + 1][0]) / (kV2P[i][0] - kV2P[i + 1][0]);
       return (int)(kV2P[i + 1][1] + f * (kV2P[i][1] - kV2P[i + 1][1]));
@@ -70,9 +73,19 @@ Battery batterySample() {
     delay(2);
   }
   Battery b;
-  b.volts = (mv / 8) * 2.0f / 1000.0f;  // ÷2 分压回乘
-  b.pct = voltToPercent(b.volts);
-  b.charging = Serial.isPlugged();  // USB 在线 = ETA6098 充电中（红灯亮）
+  b.volts = (mv / 8) * 2.0f / 1000.0f;  // ÷2 分压回乘（原始值，日志用）
+  b.charging = Serial.isPlugged();      // USB 在线 = ETA6098 充电中（红灯亮）
+  // 显示稳定（v0.1.5）：电压 EMA 平滑 + 放电棘轮——负载压降/ADC 噪声不再直接
+  // 透传成 20~30% 跳变。放电时只降不升；充电自由升；跳升 >15% 视为换电/复位容错
+  static float emaV = 0;
+  emaV = (emaV == 0) ? b.volts : emaV + 0.3f * (b.volts - emaV);
+  int rawPct = voltToPercent(emaV);
+  static int dispPct = -1;
+  if (dispPct < 0 || b.charging || rawPct > dispPct + 15)
+    dispPct = rawPct;
+  else if (rawPct < dispPct)
+    dispPct = rawPct;
+  b.pct = dispPct;
   return b;
 }
 

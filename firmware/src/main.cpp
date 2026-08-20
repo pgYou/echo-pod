@@ -1,7 +1,7 @@
 /**
  * 录音豆 echo-pod 正式固件
  * ============================================================
- * v0.1.4 · 2026-08-20 · 微雪 ESP32-S3-ePaper-1.54（V2，N8R8，黑白屏）
+ * v0.1.5 · 2026-08-20 · 微雪 ESP32-S3-ePaper-1.54（V2，N8R8，黑白屏）
  *
  * 组装：WavRecorder（VAD 自动录音，ES8311 + SD_MMC 后端）
  *     + pod_board（电源闩锁/绿灯/电池/按键/RTC）
@@ -347,6 +347,7 @@ static void enterSync() {
   mode = PodMode::SYNC;
   recorder.setPaused(true);  // 正在录则先切段（保留预滚衔接）
   if (recorder.getState() == WavRecorder::State::RECORDING) recorder.splitSegment();
+  battery = pod::batterySample();  // 插拔沿取新鲜样：charging 不再用 ≤60s 旧快照（⚡ 时序 bug）
   pod::setLed(pod::Led::BLINK_500MS);
   renderPage();
   pod::log::event("[usb] 插入 → 同步态（录音暂停）\n");
@@ -355,6 +356,7 @@ static void enterSync() {
 static void exitSync() {
   mode = PodMode::NORMAL;
   recorder.setPaused(false);
+  battery = pod::batterySample();  // 同上：拔线沿新鲜样，防 ⚡ 残留
   pod::setLed(pod::Led::OFF);
   renderPage();
   pod::log::event("[usb] 拔出 → 恢复监听\n");
@@ -459,10 +461,13 @@ void loop() {
     }
   }
 
-  // 6. 电池周期采样（60s；不刷屏，跨阈值时随下一次自然刷新体现）
+  // 6. 电池周期采样（60s；百分比不刷屏——跨阈值随下一次自然刷新体现；
+  //    充电态翻转例外：立即刷一次，⚡ 图标与红灯对齐 ≤60s）
   if (millis() - lastBatteryMs > 60000) {
+    bool chgWas = battery.charging;
     lastBatteryMs = millis();
     battery = pod::batterySample();
+    if (battery.charging != chgWas) renderPage();
     pod::log::event("[bat] %.2fV %d%%%s\n", battery.volts, battery.pct,
                   battery.charging ? " 充电中" : "");
   }
@@ -519,6 +524,20 @@ void loop() {
 
   // 8. 串口校时（TimeSync：电脑发 "SETTIME:<unix秒>\n"，插线时可用）
   timeSync.update();
+
+  // 9. 分钟沿刷屏（时钟走字）：每秒查 RTC 分钟，变化才刷——残影只来自变化的分钟
+  //    数字，同分钟零驱动；600ms 阻塞由 2s 预滚环吸收（切段刷屏同机制已验证）。
+  //    电量百分比也随每分钟刷新自然跟进（不用等状态事件）
+  static uint32_t lastMinPoll = 0;
+  static int lastMin = -1;
+  if (millis() - lastMinPoll >= 1000) {
+    lastMinPoll = millis();
+    pod::RtcTime rt;
+    if (pod::rtcRead(rt) && rt.mi != lastMin) {
+      lastMin = rt.mi;
+      renderPage();
+    }
+  }
 
   delay(2);  // 让键扫描/串口有呼吸
 }

@@ -5,7 +5,7 @@
 > 本工程是独立 git 仓库，作为 submodule 嵌入 [deep-dive](https://github.com/pgYou/deep-dive) 学习项目。
 > 完整上下文（决策历程、交互设计、协议、postmortem）在 deep-dive 仓库：
 > - [项目 Journey](https://github.com/pgYou/deep-dive/blob/main/projects/recording-pod-hardware/Journey.md) · [交互设计](https://github.com/pgYou/deep-dive/blob/main/projects/recording-pod-hardware/interaction-design.md) · [设备协议](https://github.com/pgYou/deep-dive/blob/main/projects/recording-pod-hardware/device-protocol.md)
-> - **版本迭代记录：[CHANGELOG.md](CHANGELOG.md)**（当前 v0.1.4）
+> - **版本迭代记录：[CHANGELOG.md](CHANGELOG.md)**（当前 v0.1.5）
 
 ## 硬件
 
@@ -73,6 +73,7 @@ LISTEN:0    # 恢复插线自动同步策略
 
 - ✅ 设备→App 全链路闭环：VAD 录音 → SD → 读卡器 → App 识别（协议 v1.1）
 - ✅ 交互矩阵 / 七状态屏 / 绿灯 / 低电保护 / 真关机 全量实机验证
-- ⏳ v0.1.4 待完整验证（时间链路：自检✓ → SETTIME → 文件落当日文件夹；VAD 抗误触：咳嗽/敲桌不触发、说话 ~1s 触发）
-- ⏳ 佩戴实测收尾：VAD 抗误触复测（窗口 32 帧方案，清单见 CHANGELOG v0.1.4）、8h 续航
+- ✅ v0.1.4 佩戴实测验收：时间链路（文件名落当日目录+时间正确）、VAD 密度阈值（摩擦/口袋噪声收敛，用户确认「改善很多」）
+- ⏳ v0.1.5 待烧录验证：电量重标定（0%=3.60V+棘轮，看放电单调下滑）、⚡ 插拔沿即刻出现/消失、阈值 0.92 说话仍正常触发、分钟沿走字
+- ⏳ 佩戴实测收尾：8h 续航；绒毛套 A/B（可选）
 - 📋 v0.2.0：USB-MSC 块代理同步（TinyUSB 切栈）+ CDC 自动校时 + 固件内 SD 格式化
