@@ -8,10 +8,11 @@
  * 职责（v0.1.2 收窄）：只做两件事——设 TZ 时区、非阻塞解析串口
  * "SETTIME:<unix秒>\n" 并经 onSynced 回调交付。自身不设系统时间。
  *
- * 时间权威（pod_board）：开机 rtcBegin 以 RTC 芯片为准（仅落后于固件
- * 编译时刻才用编译时间兜底）；校时统一入口 pod::rtcSet(unix)——
- * settimeofday + 写 RTC 芯片一起完成，全固件 time()/localtime_r
- * （录音文件名 / 日志时间戳 / FAT 时间戳）自动跟随，屏幕直读芯片一致。
+ * 时间权威（pod_board）：开机 rtcBegin 无条件采纳芯片时间（ACK+OS=0 即
+ * 有效）；仅芯片失效（无芯片/停振）才用编译时间兜底；校时统一入口
+ * pod::rtcSet(unix)——settimeofday + 写 RTC 芯片一起完成，全固件
+ * time()/localtime_r（录音文件名 / 日志时间戳 / FAT 时间戳）自动跟随，
+ * 屏幕直读芯片一致。
  *
  * 串口协议：电脑发送 "SETTIME:1770000000\n"（Unix 时间戳，秒，UTC）
  * 时区：TZ="CST-8" → localtime_r 显示 UTC+8（中国本地时间），文件名用本地时间

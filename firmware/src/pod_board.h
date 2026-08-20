@@ -41,9 +41,9 @@ KeyEvent keyPoll();  // loop 里每次调用，返回本周期事件（沿触发
 struct RtcTime {
   uint8_t y, mo, d, h, mi, s;  // y = 2000+xx
 };
-// 开机初始化（唯一调用处 setup）：芯片时间 ≥ 固件编译时刻（在走时）→ 采纳并设
-// 系统时钟，返回 true；否则（无芯片 / 停振 / 落后）编译时间兜底（有芯片则写回
-// 重新起步），返回 false 待校准
+// 启动自检·时间项（唯一调用处 setup）：芯片自报有效（ACK+OS=0，晶振持续走时）
+// → 无条件采纳为系统时钟，不做编译时间比较；无芯片/停振 → 编译时间兜底起步
+// （有芯片则写回重新走时），返回 false 待插线校准
 bool rtcBegin();
 bool rtcRead(RtcTime &t);
 // 统一校时入口：settimeofday + 写 RTC 芯片一次完成（无芯片则只设系统时钟）。

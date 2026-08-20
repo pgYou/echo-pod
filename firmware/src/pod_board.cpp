@@ -238,7 +238,7 @@ static void setSystemTime(time_t ts) {
   settimeofday(&tv, nullptr);
 }
 
-// 编译时刻（__DATE__/__TIME__，本机墙钟=东八区）—— 兜底起步值 / 新旧比较基准
+// 编译时刻（__DATE__/__TIME__，本机墙钟=东八区）—— 芯片失效时的兜底起步值
 static RtcTime compileTime() {
   static const char *kMo[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
                               "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
@@ -287,36 +287,32 @@ bool rtcBegin() {
     delay(10);
     if (!Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL)) {
       Serial.println("[rtc] Wire.begin 二次失败");
+      setSystemTime(rtcToUnix(compileTime()));  // 总线死的极端场景也兜底，文件名不至于 1970
       return false;
     }
   }
-  // 时间权威 = RTC 芯片；仅当芯片无效（无 ACK / 停振 OS=1）或落后于固件编译
-  // 时刻（停振残留旧值）时，才用编译时间兜底——新旧取新者
+  // 启动自检·时间项：外部 RTC 芯片 = 唯一时间权威。芯片自报有效（ACK + OS=0，
+  // 即晶振持续走时）→ 无条件采纳，不做编译时间比较——OS=0 时时间必然连续，
+  // 「有效但过期」不存在；失效（无芯片/停振）才编译时间兜底
   RtcTime t;
-  bool readOk = rtcRead(t);
-  RtcTime ct = compileTime();
-  time_t ctTs = rtcToUnix(ct);
-  if (readOk) {
-    time_t rtcTs = rtcToUnix(t);
-    Serial.printf("[rtc] 原始读数 20%02d-%02d-%02d %02d:%02d:%02d（固件编译 20%02d-%02d-%02d）\n",
-                  t.y, t.mo, t.d, t.h, t.mi, t.s, ct.y, ct.mo, ct.d);
-    if (rtcTs >= ctTs) {  // 芯片新于编译时刻 = 在走时 → 采纳为权威
-      setSystemTime(rtcTs);
-      return true;
-    }
-    Serial.println("[rtc] 芯片时间落后于固件编译时刻（停振残留旧值）→ 编译时间兜底");
+  if (rtcRead(t)) {
+    setSystemTime(rtcToUnix(t));
+    Serial.printf("[自检·时间] ✓ 芯片 20%02d-%02d-%02d %02d:%02d:%02d\n",
+                  t.y, t.mo, t.d, t.h, t.mi, t.s);
+    return true;
   }
-  // 兜底：编译时刻起步；有芯片（ACK）则写回，让芯片从可信起点重新走时
+  // 失效 → 编译时间起步；有芯片则写回让它重新走时（写秒即清 OS 标志）
+  RtcTime ct = compileTime();
   Wire.beginTransmission(RTC_ADDR);
   bool ack = Wire.endTransmission() == 0;
   if (ack) {
-    rtcWrite(ct);  // 写入即清 OS 标志
+    rtcWrite(ct);
     rtcPresent_ = true;
   }
-  setSystemTime(ctTs);
-  Serial.printf("[rtc] 编译时间兜底 20%02d-%02d-%02d %02d:%02d:%02d（插线发 SETTIME 校准）\n",
-                ct.y, ct.mo, ct.d, ct.h, ct.mi, ct.s);
-  return false;  // 时间不准（待校准）
+  setSystemTime(rtcToUnix(ct));
+  Serial.printf("[自检·时间] ⚠ %s → 编译时间兜底 20%02d-%02d-%02d %02d:%02d:%02d（插线发 SETTIME 校准）\n",
+                ack ? "芯片停振（OS=1）" : "无芯片", ct.y, ct.mo, ct.d, ct.h, ct.mi, ct.s);
+  return false;  // 时间不可信（待校准）
 }
 
 }  // namespace pod
