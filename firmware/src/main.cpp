@@ -58,8 +58,8 @@ static void dumpConfig() {
                 (unsigned)hw.ringBytes,
                 (unsigned)(hw.ringBytes / (hw.sampleRate * 2)),
                 (unsigned)(hw.maxRecordMs / 1000), (unsigned)hw.minRecordBytes);
-  pod::log::event("VAD: mode=%d frame=%dms attack=%.2f release=%.2f\n",
-                (int)vad.vadMode, vad.frameMs, vad.attack, vad.release);
+  pod::log::event("VAD: mode=%d frame=%dms attack=%.2f release=%.2f/%.2f(act/idle)\n",
+                (int)vad.vadMode, vad.frameMs, vad.attack, vad.release, vad.releaseIdle);
   pod::log::event("     阈值 high=%.2f mid=%.2f low=%.2f hangover=%dms warmup=%dms window=%d\n",
                 vad.highThreshold, vad.midThreshold, vad.lowThreshold,
                 (int)vad.hangoverMs, (int)vad.warmupMs, vad.frameWindow);

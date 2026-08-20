@@ -9,7 +9,7 @@
  */
 
 // ---- 版本（正式固件唯一权威，串口横幅 / .echo-pod fw 字段同源）----
-#define FW_VERSION "0.1.1"
+#define FW_VERSION "0.1.2"
 #define FW_NAME "echo-pod"
 #define HW_ID "waveshare-epaper-1.54-v2"
 
@@ -46,19 +46,23 @@ inline WavRecorder::HardwareConfig makeHardwareConfig() {
   return hw;
 }
 
-// ---- VAD trigger 调参（1.0 实测沿用）----
+// ---- VAD trigger 调参（v0.1.2 抗咳嗽/敲桌重调，见 CHANGELOG）----
 inline VadTrigger::Params makeVadParams() {
   VadTrigger::Params vad;
   vad.vadMode = VAD_MODE_2;  // Very Aggressive：严格判人声，挡拍桌子/敲击等噪声
   vad.sampleRate = 16000;
   vad.frameMs = 30;           // VADNet 帧长 → 480 样本/帧
-  vad.attack = 0.94f;         // 15 帧≈450ms 持续 SPEECH 才触发（v0.1.0 佩戴实测偏灵敏，从 0.92 收紧）
-  vad.release = 0.92f;        // 慢降 τ≈360ms（对话间隙 score 缓降）
+  vad.attack = 0.70f;         // 0.94→0.70：抗误触职责移交 32 帧窗口，积分器回归快上升
+                              // （3 帧内 score 贴近窗口占比，触发延迟 ≈ 窗口填充时间）
+  vad.release = 0.92f;        // ACTIVE 态慢降 τ≈360ms（对话间隙 score 缓降不切段）
+  vad.releaseIdle = 0.75f;    // IDLE 态快泄 τ≈100ms（连咳/连敲间隙 score 掉光，不累积）
   vad.highThreshold = 0.68f;  // 上穿 → ACTIVE（佩戴环境噪声实测易触发，0.60→0.68）
   vad.midThreshold = 0.30f;   // >=MID 才清零 hangover（防抖动重置）
   vad.lowThreshold = 0.20f;   // <LOW 累计 hangover
   vad.hangoverMs = 6000;      // lowMs 累计满 6s 才停
   vad.warmupMs = 300;         // 开机预热丢弃（codec/VADNet 瞬态）
-  vad.frameWindow = 5;        // 5 帧滑动窗口取占比（抑制瞬态噪声）
+  vad.frameWindow = 32;       // 5→32：窗口 150ms→960ms，语义从"防毛刺"升级为"语音密度"
+                              // 单声咳嗽(~15帧)占比≈0.47、长咳(20帧)≈0.63 都过不了 0.68；
+                              // 真人连续说话占比≈1.0 正常触发（延迟~0.75s < 2s 预滚，不丢首音）
   return vad;
 }

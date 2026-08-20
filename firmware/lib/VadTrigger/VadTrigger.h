@@ -59,8 +59,13 @@ public:
     //   attack=0.30 → 1 帧就破 HIGH（太敏感，单帧噪声误触发，已弃用）
     float attack = 0.70f; // 帧判 SPEECH 时：score = score*attack + 1*(1-attack)
     float release =
-        0.92f; // 帧判 silence 时：score = score*release + 0*(1-release)
+        0.92f; // ACTIVE 态帧判 silence 时：score = score*release + 0*(1-release)
                // 越大下降越慢（τ≈360ms，对话间隙 score 缓降，不立刻停）
+    float releaseIdle =
+        0.75f; // IDLE 态（未触发）的下降系数：快泄 τ≈100ms。
+               // 连环咳嗽/连续敲击的间隙里 score 迅速泄掉，不会跨间隙累积
+               // 垫到 HIGH 阈值。ACTIVE 态不用它（对话停顿不能快掉）。
+               // 设为与 release 同值即退回旧行为（状态无关衰减）
 
     // ---- 三区间迟滞（HIGH > MID > LOW）----
     float highThreshold = 0.60f; // 上穿 → ACTIVE（要近期 60%+ 帧判 SPEECH）
@@ -119,7 +124,7 @@ private:
   uint32_t warmupFrames_ = 0; // 预热帧数（= warmupMs / frameMs，begin 时算）
 
   // 滑动窗口（最近 N 帧 VADNet 判定，取占比抑制瞬态噪声）
-  static const int MAX_WIN = 16;
+  static const int MAX_WIN = 48; // 容量上限（48 帧 ≈ 1.44s @30ms，数组 192B 可忽略）
   int winBuf_[MAX_WIN] = {0}; // 环形存最近 N 帧的 0/1
   int winSize_ = 1;           // 窗口大小（= frameWindow，clamp 到 [1, MAX_WIN]）
   int winHead_ = 0;           // 写入位

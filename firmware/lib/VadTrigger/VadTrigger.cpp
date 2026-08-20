@@ -84,7 +84,14 @@ VadTrigger::State VadTrigger::process(const int16_t *samples, int n) {
 
   // 3. score 积分（目标改为窗口占比 ratio，而非单帧 0/1）
   //    ratio 低 → score 目标低 → 涨不起来（瞬态噪声被窗口稀释后压不上去）
-  float a = (ratio >= score_) ? params_.attack : params_.release;
+  //    下降系数按状态分流：IDLE 快泄（releaseIdle，防连咳/连敲跨间隙累积
+  //    垫脚）；ACTIVE 慢降（release，对话停顿 score 缓降不切段）
+  float a;
+  if (ratio >= score_) {
+    a = params_.attack;
+  } else {
+    a = (state_ == State::IDLE) ? params_.releaseIdle : params_.release;
+  }
   score_ = score_ * a + ratio * (1.0f - a);
 
   // 4. 双阈值迟滞状态机
