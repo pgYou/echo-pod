@@ -1,75 +1,72 @@
-# echo-pod
+# echo-pod 固件
 
-录音豆硬件项目的**阶段2 正式工程**。继承阶段1 验证项目 [`recording-pod-hello`](https://github.com/pgYou/deep-dive/tree/main/projects/recording-pod-hardware/archive/xiao-route/code/recording-pod-hello) 已跑通的核心录音链路（WavRecorder + VadTrigger + RingBuffer + TimeSync），在阶段2 加入人机交互（LED / 按键 / 电池 / 充电）与可穿戴形态。
+录音豆（Echo回响）**正式固件**：穿戴式自动录音设备，VAD 人声触发录音 → SD 卡 → 拔卡/读卡器交给桌面 App 转写。
 
 > 本工程是独立 git 仓库，作为 submodule 嵌入 [deep-dive](https://github.com/pgYou/deep-dive) 学习项目。
-> 完整上下文（决策历程、硬件选型、焊接指南等）在 deep-dive 仓库中：
-> - [项目 Journey](https://github.com/pgYou/deep-dive/blob/main/projects/recording-pod-hardware/Journey.md)
-> - [阶段2 执行计划](https://github.com/pgYou/deep-dive/blob/main/projects/recording-pod-hardware/archive/xiao-route/stage2-execution-plan.md)
-> - [阶段2 固件设计](https://github.com/pgYou/deep-dive/blob/main/projects/recording-pod-hardware/archive/xiao-route/stage2-firmware-design.md)
-> - [焊接指南](https://github.com/pgYou/deep-dive/blob/main/projects/recording-pod-hardware/archive/xiao-route/wiring-guide.md)
+> 完整上下文（决策历程、交互设计、协议、postmortem）在 deep-dive 仓库：
+> - [项目 Journey](https://github.com/pgYou/deep-dive/blob/main/projects/recording-pod-hardware/Journey.md) · [交互设计](https://github.com/pgYou/deep-dive/blob/main/projects/recording-pod-hardware/interaction-design.md) · [设备协议](https://github.com/pgYou/deep-dive/blob/main/projects/recording-pod-hardware/device-protocol.md)
+> - **版本迭代记录：[CHANGELOG.md](CHANGELOG.md)**（当前 v0.1.3）
 
 ## 硬件
 
-- **主控**：Seeed XIAO ESP32-S3 Sense（+ 摄像头扩展板，用板载 PDM 麦克风 + microSD）
-- **Flash/PSRAM**：8MB QIO Flash + OPI PSRAM
-- **USB**：CDC 虚拟串口（无原生 USB-串口芯片）
+微雪 **ESP32-S3-ePaper-1.54 V2**（ESP32-S3-PICO-1-N8R8，1.54" 黑白墨水屏 200×200）
+
+- **音频**：ES8311 codec + 模拟麦克风（I2S 标准模式）
+- **存储**：SD_MMC（IDF esp_vfs_fat 挂载，20MHz 1-bit）
+- **时钟**：PCF85063 RTC（I2C 0x51，电池直供关机存活）——全固件唯一时间权威
+- **电源**：PWR 键软闩锁（GPIO17 接管/真断电），USB 在线充电（ETA6098）
 
 ## 目录结构
 
 ```
-echo-pod/
-├── platformio.ini              # PlatformIO 配置（arduino-esp32 3.3.11 + ghfast 镜像）
+firmware/
+├── platformio.ini              # 单 env：echo-pod（pioarduino platform + arduino 框架）
+├── CHANGELOG.md                # 版本迭代记录（本文件平级）
 ├── src/
-│   ├── main.cpp                # 当前：阶段1 基线（VAD 自动录音）
-│   ├── config.h                # 硬件 + VAD 参数配置（改参数只动这里）
-│   └── step2/                  # 阶段2 单步验证固件（每个 env 只编译 1 个）
-│       └── test_led.cpp        # B1：白光 + 红光 LED（LEDC PWM）
-├── lib/                        # 核心模块（阶段1 沉淀，阶段2 复用）
-│   ├── WavRecorder/            # WAV 录音器（I2S → 环形缓冲 → SD）
-│   ├── VadTrigger/             # VAD 触发器（ESP-SR VADNet 神经网络）
-│   ├── RingBuffer/             # 环形缓冲（预录不丢首音）
-│   ├── TimeSync/               # 串口校时（编译时间兜底）
-│   └── speexdsp/               # vendoredSpeexDSP（降噪预处理）
+│   ├── main.cpp                # PodController：状态机 + 交互矩阵分派
+│   ├── config.h                # 版本号 + 引脚 + 阈值 + VAD 参数（改参数只动这里）
+│   ├── pod_board.{h,cpp}       # 闩锁/绿灯/电池/按键/RTC（时间权威+自检）
+│   ├── pod_display.{h,cpp}     # 七状态墨水屏页面
+│   └── pod_log.{h,cpp}         # 串口+SD 双写日志（echo-pod/.logs/，保留 7 天）
+├── lib/
+│   ├── WavRecorder/            # 录音器：VAD 触发 → 预滚环形缓冲 → WAV 落卡（切段/暂停）
+│   ├── VadTrigger/             # ESP-SR VADNet 神经网络人声检测
+│   ├── RingBuffer/             # 预录环形缓冲（不丢首音）
+│   ├── TimeSync/               # 串口 SETTIME 命令解析（时间设置走 pod::rtcSet）
+│   ├── EchoPaper/              # 墨水屏驱动（官方 BSP verbatim + 1bpp Painter + 字库）
+│   ├── ES8311/                 # codec 驱动
+│   └── speexdsp/               # vendored SpeexDSP（降噪预处理）
 ├── tools/
+│   ├── gen_fonts.swift         # CoreText 字库生成（中文 20×20 / ASCII 8×16）
 │   └── sync_time.py            # 电脑端校时脚本
-└── README.md
+└── reference/                  # 官方仓库 clone（gitignore，考证用）
 ```
 
-## 引脚映射
+## 关键引脚（唯一权威 `src/config.h`，考证见 interaction-design.md §1）
 
-| 功能 | 焊盘 | GPIO | 说明 |
-|------|------|------|------|
-| 白光 LED（录音指示） | D3 | GPIO4 | 220Ω → GND，LEDC PWM |
-| 红光 LED（状态/充电/低电） | D1 | GPIO2 | 220Ω → GND，LEDC PWM |
-| 多功能按键 | D0 | GPIO1 | INPUT_PULLUP，Deep Sleep ext0 唤醒源 |
-| 电池电压 ADC | D4 | GPIO5 | 100K/100K 分压中点（ADC1_CH4） |
-| PDM 麦 CLK/DATA | — | GPIO42/41 | 扩展板 MSA261（探针实证） |
-| SD 卡 CS | — | GPIO21 | 探针实证（与板载 USER_LED 复用） |
+| 功能 | GPIO | 说明 |
+|------|------|------|
+| 绿灯 | 3 | 低电平亮（红灯为充电指示，不可控） |
+| BOOT 键 | 0 | 短按切段/刷新，长按 3s 静音 |
+| PWR 键 | 18 | 长按 3s 真关机 |
+| 电源闩锁 | 17 | 高=固件接管供电（开机第一件事） |
+| 电池 ADC | 4 | ÷2 分压 → 查表百分比 |
+| I2C（RTC/codec） | 47/48 | PCF85063 @0x51，ES8311 @0x18 |
+| SD_MMC | CLK 39 / CMD 41 / D0 40 | 1-bit 20MHz |
 
 ## 烧录
 
 ```bash
-# 主固件（阶段1 基线，阶段2 C 大步重写为 PodController 组装）
-pio run -e echo-pod -t upload
-pio device monitor
-
-# 阶段2 单步验证（如 B1 LED 验证）
-pio run -e echo-pod-step2-led -t upload && pio device monitor
+pio run -t upload --upload-port /dev/cu.usbmodem101   # 端口以实际枚举为准
+pio device monitor -p /dev/cu.usbmodem101
+# 校时（monitor 中粘贴输出）：
+python3 -c "import time; print(f'SETTIME:{int(time.time())}')"
 ```
 
-> XIAO ESP32-S3 用 USB-C 数据线连接。首次需 `gh auth` 或确保 `ghfast.top` 镜像可达（下载 arduino-esp32 3.3.11）。
+## 当前状态（2026-08-20）
 
-## 当前状态（2026-08-12）
-
-- ✅ 阶段1 核心录音链路验证通过（VAD 自动录音 + SD 卡 WAV + 串口校时）
-- ✅ 阶段2 A 前置验证完成（磁吸线引脚探测）
-- ⏳ 阶段2 B 焊接中（B1 白光/红光 LED 待焊）
-- ⏳ 阶段2 C 固件（PodController 模块待实现）
-
-## 技术栈
-
-- **PlatformIO**：pioarduino/platform-espressif32（GitHub via ghfast 镜像）
-- **框架**：arduino-esp32 **3.3.11**（ESP-IDF 5.x，LEDC 3.x API）
-- **VAD**：ESP-SR VADNet（神经网络人声检测，MODE_2 严格模式）
-- **降噪**：vendored SpeexDSP（preprocess NS + smallft FFT）
+- ✅ 设备→App 全链路闭环：VAD 录音 → SD → 读卡器 → App 识别（协议 v1.1）
+- ✅ 交互矩阵 / 七状态屏 / 绿灯 / 低电保护 / 真关机 全量实机验证
+- ⏳ v0.1.3 待烧录验证（时间链路：自检✓ → SETTIME → 文件落当日文件夹）
+- ⏳ 佩戴实测收尾：VAD 灵敏度复测（0.68/0.94）、8h 续航
+- 📋 v0.2.0：USB-MSC 块代理同步（TinyUSB 切栈）+ CDC 自动校时 + 固件内 SD 格式化
