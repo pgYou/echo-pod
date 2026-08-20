@@ -1,36 +1,14 @@
 #include "TimeSync.h"
-#include <sys/time.h>
 #include <stdio.h>
 
 void TimeSync::begin(Stream &port, const char *tz) {
   port_ = &port;
-  setenv("TZ", tz, 1);
+  setenv("TZ", tz, 1);  // localtime_r（文件名/日志时间戳）显示时区
   tzset();
   lineBuf_.reserve(64);
-  // 兜底：先用编译时间设 RTC，保证同步前文件名也有合理日期（不准但不至于 1970）
-  setRtcFromCompile();
-}
-
-void TimeSync::setRtcFromCompile() {
-  // __DATE__ 形如 "Jul 26 2026"，__TIME__ 形如 "15:30:45"
-  char mmm[4] = {0};
-  int year = 2026, mon = 1, day = 1, h = 0, m = 0, s = 0;
-  sscanf(__DATE__, "%3s %d %d", mmm, &day, &year);
-  sscanf(__TIME__, "%d:%d:%d", &h, &m, &s);
-  const char *monStr = "JanFebMarAprMayJunJulAugSepOctNovDec";
-  const char *p = strstr(monStr, mmm);
-  if (p)
-    mon = (int)((p - monStr) / 3 + 1);
-  struct tm t = {0};
-  t.tm_year = year - 1900;
-  t.tm_mon = mon - 1;
-  t.tm_mday = day;
-  t.tm_hour = h;
-  t.tm_min = m;
-  t.tm_sec = s;
-  time_t now = mktime(&t);
-  struct timeval tv = {.tv_sec = now};
-  settimeofday(&tv, NULL);
+  // 只管时区与串口命令，不设时间——时间权威在 pod_board（rtcBegin：RTC 芯片
+  // 为准，编译时间兜底）。v0.1.1 曾在此无条件 settimeofday(编译时间)，每次
+  // 开机把有效 RTC 时间砸掉，文件名日期永远停在编译日（v0.1.2 移除）
 }
 
 void TimeSync::update() {
@@ -57,9 +35,8 @@ void TimeSync::update() {
 }
 
 void TimeSync::sync(time_t timestamp) {
-  struct timeval tv = {.tv_sec = timestamp};
-  settimeofday(&tv, NULL);
-  bool wasUnsynced = !synced_;
+  // 设置动作交回调（main 接 pod::rtcSet 统一入口：系统时钟 + RTC 芯片一起设），
+  // 本类不再直接 settimeofday
   synced_ = true;
   if (syncedCb_) {
     syncedCb_(timestamp);

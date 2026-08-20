@@ -238,7 +238,24 @@ static void setSystemTime(time_t ts) {
   settimeofday(&tv, nullptr);
 }
 
+// 编译时刻（__DATE__/__TIME__，本机墙钟=东八区）—— 兜底起步值 / 新旧比较基准
+static RtcTime compileTime() {
+  static const char *kMo[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                              "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+  char monStr[4] = {0};
+  int day, year, h, mi, s;
+  sscanf(__DATE__, "%3s %d %d", monStr, &day, &year);
+  sscanf(__TIME__, "%d:%d:%d", &h, &mi, &s);
+  uint8_t moN = 1;
+  for (int i = 0; i < 12; i++)
+    if (strcmp(monStr, kMo[i]) == 0) moN = i + 1;
+  return {(uint8_t)(year - 2000), moN, (uint8_t)day, (uint8_t)h, (uint8_t)mi, (uint8_t)s};
+}
+
 void rtcSet(time_t unixSec) {
+  // 统一校时入口：系统时钟无条件设（无芯片时也要走时间）；芯片在则同步写回
+  if (unixSec < 1577836800) return;  // <2020-01-01 = 异常值（SETTIME 手误/解析垃圾），拒绝
+  setSystemTime(unixSec);
   if (!rtcPresent_) return;
   time_t local = unixSec + 8 * 3600;  // 东八区墙钟（UTC + 偏移，gmtime_r 无 TZ 依赖）
   struct tm ti;
@@ -251,7 +268,6 @@ void rtcSet(time_t unixSec) {
   t.mi = ti.tm_min;
   t.s = ti.tm_sec;
   rtcWrite(t);
-  setSystemTime(unixSec);  // system time 同步（录音文件命名来源）
 }
 
 bool rtcBegin() {
@@ -274,32 +290,33 @@ bool rtcBegin() {
       return false;
     }
   }
+  // 时间权威 = RTC 芯片；仅当芯片无效（无 ACK / 停振 OS=1）或落后于固件编译
+  // 时刻（停振残留旧值）时，才用编译时间兜底——新旧取新者
   RtcTime t;
-  rtcPresent_ = rtcRead(t);
-  if (rtcPresent_) {
-    Serial.printf("[rtc] 原始读数 20%02d-%02d-%02d %02d:%02d:%02d\n", t.y, t.mo, t.d, t.h, t.mi, t.s);
-    // RTC 有效：设为 system time（录音文件命名的时间权威源）
-    setSystemTime(rtcToUnix(t));
-    return true;
+  bool readOk = rtcRead(t);
+  RtcTime ct = compileTime();
+  time_t ctTs = rtcToUnix(ct);
+  if (readOk) {
+    time_t rtcTs = rtcToUnix(t);
+    Serial.printf("[rtc] 原始读数 20%02d-%02d-%02d %02d:%02d:%02d（固件编译 20%02d-%02d-%02d）\n",
+                  t.y, t.mo, t.d, t.h, t.mi, t.s, ct.y, ct.mo, ct.d);
+    if (rtcTs >= ctTs) {  // 芯片新于编译时刻 = 在走时 → 采纳为权威
+      setSystemTime(rtcTs);
+      return true;
+    }
+    Serial.println("[rtc] 芯片时间落后于固件编译时刻（停振残留旧值）→ 编译时间兜底");
   }
-  // 无 ACK = 无芯片；OS=1 = 掉电过。有芯片则编译时间兜底起步（插线校准前文件名大致正确）
+  // 兜底：编译时刻起步；有芯片（ACK）则写回，让芯片从可信起点重新走时
   Wire.beginTransmission(RTC_ADDR);
   bool ack = Wire.endTransmission() == 0;
-  if (!ack) return false;
-  static const char *kMo[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
-                              "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
-  char monStr[4] = {0};
-  int day, year, h, mi, s;
-  sscanf(__DATE__, "%3s %d %d", monStr, &day, &year);
-  sscanf(__TIME__, "%d:%d:%d", &h, &mi, &s);
-  uint8_t moN = 1;
-  for (int i = 0; i < 12; i++)
-    if (strcmp(monStr, kMo[i]) == 0) moN = i + 1;
-  rtcWrite({(uint8_t)(year - 2000), moN, (uint8_t)day, (uint8_t)h, (uint8_t)mi, (uint8_t)s});
-  rtcPresent_ = true;
-  setSystemTime(rtcToUnix({(uint8_t)(year - 2000), moN, (uint8_t)day, (uint8_t)h, (uint8_t)mi,
-                           (uint8_t)s}));
-  return false;  // 掉电兜底过（时间不准，待插线校准）
+  if (ack) {
+    rtcWrite(ct);  // 写入即清 OS 标志
+    rtcPresent_ = true;
+  }
+  setSystemTime(ctTs);
+  Serial.printf("[rtc] 编译时间兜底 20%02d-%02d-%02d %02d:%02d:%02d（插线发 SETTIME 校准）\n",
+                ct.y, ct.mo, ct.d, ct.h, ct.mi, ct.s);
+  return false;  // 时间不准（待校准）
 }
 
 }  // namespace pod

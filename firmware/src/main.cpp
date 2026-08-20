@@ -1,7 +1,7 @@
 /**
  * 录音豆 echo-pod 正式固件
  * ============================================================
- * v0.1.1 · 2026-08-18 · 微雪 ESP32-S3-ePaper-1.54（V2，N8R8，黑白屏）
+ * v0.1.2 · 2026-08-20 · 微雪 ESP32-S3-ePaper-1.54（V2，N8R8，黑白屏）
  *
  * 组装：WavRecorder（VAD 自动录音，ES8311 + SD_MMC 后端）
  *     + pod_board（电源闩锁/绿灯/电池/按键/RTC）
@@ -251,10 +251,10 @@ void setup() {
   pod::setLed(pod::Led::OFF);
   pod::batteryInit();
 
-  // RTC：有效 → system time 即为真实时间（关机存活已实测）；掉电 → 编译时间兜底
+  // RTC：时间权威（≥固件编译时刻即采纳）→ system time；无效/落后 → 编译时间兜底
   bool rtcOk = pod::rtcBegin();
   Serial.println(rtcOk ? "[rtc] 有效，时间可用"
-                       : "[rtc] 掉电/无芯片，编译时间兜底（插线可校准）");
+                       : "[rtc] 时间不可信，编译时间兜底（插线发 SETTIME 校准）");
 
   // 屏幕先起（SD 异常也立刻有显示）
   pod::displayBegin();

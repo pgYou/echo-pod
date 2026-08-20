@@ -37,12 +37,17 @@ enum class KeyEvent : uint8_t {
 };
 KeyEvent keyPoll();  // loop 里每次调用，返回本周期事件（沿触发，不重复）
 
-// ---- RTC（PCF85063，I2C 0x51；关机存活已实测 → system time 权威源）----
+// ---- RTC（PCF85063，I2C 0x51；关机存活 → 全固件时间权威）----
 struct RtcTime {
   uint8_t y, mo, d, h, mi, s;  // y = 2000+xx
 };
-bool rtcBegin();          // 有效→settimeofday 返回 true；掉电→编译时间兜底返回 false；无芯片 false
+// 开机初始化（唯一调用处 setup）：芯片时间 ≥ 固件编译时刻（在走时）→ 采纳并设
+// 系统时钟，返回 true；否则（无芯片 / 停振 / 落后）编译时间兜底（有芯片则写回
+// 重新起步），返回 false 待校准
+bool rtcBegin();
 bool rtcRead(RtcTime &t);
-void rtcSet(time_t unixSec);  // 校时入口（串口 CDC / 未来 App 下发共用）
+// 统一校时入口：settimeofday + 写 RTC 芯片一次完成（无芯片则只设系统时钟）。
+// 之后全固件 time()/localtime_r（录音文件名/日志时间戳）自动跟随；屏幕直读芯片
+void rtcSet(time_t unixSec);
 
 }  // namespace pod
