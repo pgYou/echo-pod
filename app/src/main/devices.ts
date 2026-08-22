@@ -9,6 +9,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import type { DeviceInfo } from '../shared/types'
 import { emitState, findRecording, setDisconnected, upsertDevice } from './state'
+import { cdcTimeSync } from './cdc'
 
 const VOLUMES_DIR = '/Volumes'
 const MARKER_FILE = '.echo-pod'
@@ -68,6 +69,9 @@ function readMarker(volumePath: string): Marker | null {
 
 /** 上一轮扫描结果（serial → 状态摘要），用于变更检测：没变化就不广播不落盘 */
 let lastSeen = new Map<string, string>()
+/** 断连去抖：CDC 清理事务（RMBEGIN→RMEND）会退盘 1~3s + 固件延迟复挂 4s，
+ *  卷短暂消失合计可达 ~6s。连续 3 轮（≥6s）不见才判断连，避免清理时 UI 闪「已断开」 */
+const missStreak = new Map<string, number>()
 
 /**
  * 扫描所有挂载卷。返回是否有状态变化。
@@ -107,13 +111,28 @@ export function scanVolumes(): boolean {
     if (lastSeen.get(info.serial) !== current.get(info.serial)) {
       upsertDevice(info)
       changed = true
+      // 插入沿（含 App 启动时已在线）：CDC 自动校时一次（U 盘通道之外的
+      // 串口通道，hello 握手 + SETTIME，见 cdc.ts；失败静默）
+      if (!lastSeen.has(info.serial)) void cdcTimeSync()
+    }
+  }
+  // 断连去抖（见 missStreak 注释）：streak 里的先计满，本轮新消失的入 streak
+  for (const serial of missStreak.keys()) {
+    if (current.has(serial)) {
+      missStreak.delete(serial) // 回来了（清理事务复挂）
+      continue
+    }
+    const n = (missStreak.get(serial) ?? 0) + 1
+    if (n >= 3) {
+      setDisconnected(serial)
+      missStreak.delete(serial)
+      changed = true
+    } else {
+      missStreak.set(serial, n)
     }
   }
   for (const serial of lastSeen.keys()) {
-    if (!current.has(serial)) {
-      setDisconnected(serial)
-      changed = true
-    }
+    if (!current.has(serial)) missStreak.set(serial, 1)
   }
   lastSeen = current
   if (changed) emitState()

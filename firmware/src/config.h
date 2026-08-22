@@ -9,7 +9,9 @@
  */
 
 // ---- 版本（正式固件唯一权威，串口横幅 / .echo-pod fw 字段同源）----
-#define FW_VERSION "0.1.5"
+// 0.2.2：rtcBegin 成功分支漏置 rtcPresent_（v0.1.3 引入）→ SETTIME 的芯片
+// 写回被静默跳过，芯片漂移（屏幕恒慢）无法被校时修复
+#define FW_VERSION "0.2.2"
 #define FW_NAME "echo-pod"
 #define HW_ID "waveshare-epaper-1.54-v2"
 

@@ -15,5 +15,8 @@ namespace pod::log {
 void begin();  // SD 挂载成功后调用：开当天文件 + 清理旧日志
 void event(const char *fmt, ...);  // 事件日志：串口 + 文件（带时间戳）
 void tick();  // loop 周期调用：跨天滚动（60s 检查一次）
+// v0.2.0：SYNC 态（USB-MSC 挂卡期间）禁固件侧写卡——SD 只归 MSC 读
+//（software-spec 互斥铁律：电脑缓存与固件写卡不能并存）。串口输出不受影响
+void setCardEnabled(bool on);
 
 }  // namespace pod::log

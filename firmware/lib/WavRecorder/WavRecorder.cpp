@@ -21,6 +21,31 @@ private:
 
 WavRecorder::~WavRecorder() { end(); }
 
+// SDIO 1-bit IDF 挂载（begin 与 rescueMount 共用；format=true 时挂载失败由
+// FatFS f_mkfs FAT 重格再挂——固件内格式化，显式危险操作仅 ERROR 态入口可达）
+static esp_err_t mountSd(const WavRecorder::HardwareConfig &hw, bool format,
+                         sdmmc_card_t **outCard) {
+  esp_vfs_fat_sdmmc_mount_config_t cfg = {};
+  cfg.format_if_mount_failed = format;
+  cfg.max_files = 5;
+  sdmmc_host_t host = SDMMC_HOST_DEFAULT();  // 20MHz（DEFAULT）
+  sdmmc_slot_config_t slot = SDMMC_SLOT_CONFIG_DEFAULT();
+  slot.width = 1;  // 1-bit（D0 单线）
+  slot.clk = (gpio_num_t)hw.sdMmcClk;
+  slot.cmd = (gpio_num_t)hw.sdMmcCmd;
+  slot.d0 = (gpio_num_t)hw.sdMmcD0;
+  return esp_vfs_fat_sdmmc_mount("/sdcard", &host, &slot, &cfg, outCard);
+}
+
+bool WavRecorder::rescueMount(bool format) {
+  if (!hw_.useSdMmc) return false;
+  if (sdCard_) {  // 已挂载（begin 时 SD 正常、音频链路失败的 ERROR 场景）：先卸载
+    esp_vfs_fat_sdcard_unmount("/sdcard", sdCard_);
+    sdCard_ = nullptr;
+  }
+  return mountSd(hw_, format, &sdCard_) == ESP_OK;
+}
+
 bool WavRecorder::begin(const HardwareConfig &hw, const VadTrigger::Params &vad) {
   if (begun_) end();
   hw_ = hw;
@@ -37,17 +62,7 @@ bool WavRecorder::begin(const HardwareConfig &hw, const VadTrigger::Params &vad)
   // ---- 存储后端（微雪板走 IDF 挂载：step0-mic 验证过的路径，20MHz 默认频率；
   //      文件 IO 全 POSIX 经 VFS 统一，绕开 arduino SD_MMC 库）----
   if (hw_.useSdMmc) {
-    esp_vfs_fat_sdmmc_mount_config_t cfg = {};
-    cfg.format_if_mount_failed = false;
-    cfg.max_files = 5;
-    sdmmc_host_t host = SDMMC_HOST_DEFAULT();  // 20MHz（DEFAULT）
-    sdmmc_slot_config_t slot = SDMMC_SLOT_CONFIG_DEFAULT();
-    slot.width = 1;  // 1-bit（D0 单线）
-    slot.clk = (gpio_num_t)hw_.sdMmcClk;
-    slot.cmd = (gpio_num_t)hw_.sdMmcCmd;
-    slot.d0 = (gpio_num_t)hw_.sdMmcD0;
-    sdmmc_card_t *card = nullptr;
-    esp_err_t err = esp_vfs_fat_sdmmc_mount("/sdcard", &host, &slot, &cfg, &card);
+    esp_err_t err = mountSd(hw_, false, &sdCard_);
     if (err != ESP_OK) {
       char msg[80];
       snprintf(msg, sizeof(msg), "SD 挂载失败 err=0x%x（查卡/FAT32）", err);

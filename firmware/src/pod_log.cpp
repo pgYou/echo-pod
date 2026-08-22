@@ -14,6 +14,7 @@ static constexpr int KEEP_DAYS = 7;
 
 static FILE *logFile_ = nullptr;
 static char curDay_[16] = "";
+static bool cardEnabled_ = true;  // SYNC 态置 false：event 只写串口（SD 归 MSC）
 
 static void dayString(time_t t, char *buf, size_t len) {
   struct tm ti;
@@ -75,7 +76,7 @@ void event(const char *fmt, ...) {
 
   Serial.print(buf);  // 串口始终输出
 
-  if (logFile_) {
+  if (logFile_ && cardEnabled_) {
     char ts[12];
     time_t now = time(nullptr);
     struct tm ti;
@@ -98,5 +99,7 @@ void tick() {
     openToday();
   }
 }
+
+void setCardEnabled(bool on) { cardEnabled_ = on; }
 
 }  // namespace pod::log

@@ -1,27 +1,31 @@
 /**
  * 录音豆 echo-pod 正式固件
  * ============================================================
- * v0.1.5 · 2026-08-20 · 微雪 ESP32-S3-ePaper-1.54（V2，N8R8，黑白屏）
+ * v0.2.2 · 2026-08-20 · 微雪 ESP32-S3-ePaper-1.54（V2，N8R8，黑白屏）
  *
  * 组装：WavRecorder（VAD 自动录音，ES8311 + SD_MMC 后端）
  *     + pod_board（电源闩锁/绿灯/电池/按键/RTC）
  *     + pod_display（七状态页）
- *     + TimeSync（串口 CDC 校时，插线时电脑可下发 SETTIME）
+ *     + pod_usb（v0.2.0：TinyUSB 复合设备 CDC 串口 + MSC 只读 U 盘）
+ *     + TimeSync（串口 CDC 校时，插线时电脑/App 可下发 SETTIME）
  * 交互矩阵：docs/interaction-design.md §5（短按归档、长按闭麦/关机）
  *
  * 已实现：VAD 自动录 + 切段 + 协议命名 + .echo-pod 开卡 + 全套交互 + 低电保护
- * v0.2.0 计划：USB-MSC 块代理同步（当前 v0.1.0 插线仅进入同步态暂停录音；
- *             取录音用读卡器插 SD 卡，App 按卷 + .echo-pod 识别同样可用）
+ * v0.2.1：插电脑 = U 盘 + 串口（块代理只读同步，拔线复录）+ ERROR 态固件内
+ *         格式化（长按 BOOT 5s）+ 清理事务（RMBEGIN/RM/RMEND，App 清理代删）；
+ *         校时通道升级为 App 自动（HELLO/SETTIME）
  */
 #include <Arduino.h>
 #include <time.h>
 #include <esp_mac.h>
 #include <Wire.h>
 #include <dirent.h>
+#include <unistd.h>
 #include "pod_log.h"
 #include "config.h"
 #include "pod_board.h"
 #include "pod_display.h"
+#include "pod_usb.h"
 #include "TimeSync.h"
 #include "WavRecorder.h"
 
@@ -64,7 +68,7 @@ static void dumpConfig() {
   pod::log::event("     阈值 high=%.2f mid=%.2f low=%.2f hangover=%dms warmup=%dms window=%d\n",
                 vad.highThreshold, vad.midThreshold, vad.lowThreshold,
                 (int)vad.hangoverMs, (int)vad.warmupMs, vad.frameWindow);
-  pod::log::event("构建: %s | 交互: 短按<%ums 长按%ums 格式化%ums | 低电%d%%→%us关机\n",
+  pod::log::event("构建: %s | USB: CDC+MSC只读盘 | 交互: 短按<%ums 长按%ums 格式化%ums | 低电%d%%→%us关机\n",
 #ifdef POD_DEBUG
                 "debug（插线不进同步）",
 #else
@@ -172,6 +176,21 @@ static int countTodayWavs() {
 }
 
 // ---- .echo-pod 标志文件（device-protocol.md v1.0；无则开卡写入）----
+
+// 设备串行号（efuse MAC 后 4 字节，协议格式 ES3-XXXXXXXX；标志文件与
+// CDC HELLO 应答共用，首取后缓存）
+static const char *podSerial() {
+  static char serial[16];
+  static bool cached = false;
+  if (!cached) {
+    uint8_t mac[6];
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    snprintf(serial, sizeof(serial), "ES3-%02X%02X%02X%02X", mac[2], mac[3], mac[4], mac[5]);
+    cached = true;
+  }
+  return serial;
+}
+
 static void ensureMarker() {
   String path = String(SD_ROOT) + "/.echo-pod";
   FILE *fr = fopen(path.c_str(), "rb");
@@ -181,11 +200,7 @@ static void ensureMarker() {
     fclose(fr);
     if (strstr(content, "\"fw\": \"" FW_VERSION "\"")) return;  // 版本一致，不动
   }
-  // 串行号：efuse MAC 后 4 字节（8 hex），协议格式 ES3-XXXXXXXX
-  uint8_t mac[6];
-  esp_read_mac(mac, ESP_MAC_WIFI_STA);
-  char serial[16];
-  snprintf(serial, sizeof(serial), "ES3-%02X%02X%02X%02X", mac[2], mac[3], mac[4], mac[5]);
+  // 串行号见 podSerial()（efuse MAC 后 4 字节，与 HELLO 应答同源）
 
   time_t now;
   time(&now);
@@ -204,12 +219,12 @@ static void ensureMarker() {
            "  \"tz\": \"+08:00\",\n"
            "  \"created\": \"%s\"\n"
            "}\n",
-           FW_NAME, serial, FW_VERSION, HW_ID, created);
+           FW_NAME, podSerial(), FW_VERSION, HW_ID, created);
   FILE *f = fopen(path.c_str(), "wb");
   if (f) {
     size_t n = fwrite(json, 1, strlen(json), f);
     fclose(f);
-    pod::log::event("[sd] 标志文件已写入 serial=%s fw=%s（%uB）\n", serial, FW_VERSION, (unsigned)n);
+    pod::log::event("[sd] 标志文件已写入 serial=%s fw=%s（%uB）\n", podSerial(), FW_VERSION, (unsigned)n);
   } else {
     pod::log::event("[sd] X 标志文件写入失败（open 失败）\n");
   }
@@ -224,12 +239,56 @@ static bool sdProbeOk() {
   return c >= 0;
 }
 
+// ---- CDC 清理事务（App 清理已同步录音，device-protocol §6）----
+// RMBEGIN → RM:echo-pod/…/xx.wav ×N → RMEND：退盘让固件独占删，删完复挂
+//（host 重挂即见干净 FAT）。只放行录音目录下的 .wav（防穿越/不碰 .logs）
+static bool rmPathValid(const char *rel) {
+  size_t l = strlen(rel);
+  if (l < 10 || l > 80 || strncmp(rel, "echo-pod/", 9) != 0) return false;
+  if (strstr(rel, "..") || strstr(rel, "/.")) return false;  // 含 .logs 与目录穿越
+  return strcasecmp(rel + l - 4, ".wav") == 0;
+}
+
+// RMEND 收尾：顺手清空日期目录（App 侧不再直接 rmdir——只读卷做不到了）
+static void pruneEmptyDayDirs() {
+  char root[48];
+  snprintf(root, sizeof(root), "%s/echo-pod", SD_ROOT);
+  DIR *d = opendir(root);
+  if (!d) return;
+  struct dirent *e;
+  while ((e = readdir(d))) {
+    if (e->d_name[0] == '.') continue;
+    char p[64];
+    snprintf(p, sizeof(p), "%s/%s", root, e->d_name);
+    DIR *sub = opendir(p);
+    if (!sub) continue;
+    bool empty = true;
+    struct dirent *se;
+    while ((se = readdir(sub))) {
+      if (se->d_name[0] != '.') {  // . 与 .. 之外有内容即非空
+        empty = false;
+        break;
+      }
+    }
+    closedir(sub);
+    if (empty) rmdir(p);
+  }
+  closedir(d);
+}
+
 // ---- setup ----
 void setup() {
   // 电池模式开机时序：必须最先接管供电闩锁（松开 PWR 前完成）
   pod::latchTakeover();
 
   Serial.begin(115200);
+  // CDC 接收缓冲 256→1024B：App 侧清理事务已改一问一答，这里只是加固——
+  // 0.2.1 首验实测突发批量写会溢出丢字节/熔行（详见 CHANGELOG v0.2.1）
+  Serial.setRxBufferSize(1024);
+  // TZ 尽早设：否则重启后头两条卡日志按 UTC 显示（实测 14:25 vs 本地 22:25
+  // 差 8h——TimeSync.begin 设 TZ 在 pod_log::begin 之后才跑）。TimeSync 重复设无害
+  setenv("TZ", "CST-8", 1);
+  tzset();
   delay(1500);
   pod::log::event("\n=== %s v%s%s（%s）===\n", FW_NAME, FW_VERSION,
 #ifdef POD_DEBUG
@@ -274,6 +333,10 @@ void setup() {
   delay(200);
   pod::setLed(pod::Led::OFF);
 
+  // USB 复合栈（CDC + MSC）尽早启动：ERROR 机体也有串口诊断通道。
+  // MSC 此刻无媒体（enterSync 才挂盘），卡未就绪不阻碍栈起来
+  pod::usb::begin(recorder);
+
   // 录音链路（ES8311 + SD_MMC + VAD）。回调先注册：begin 阶段的失败细节
   // （SD 挂载 / ES8311 / I2S）经 onError 打出——此前注册在后，细节被吞
   recorder.onStateChange(onRecorderState);
@@ -296,12 +359,20 @@ void setup() {
   // 串口校时通道（电脑可发 "SETTIME:<unix秒>\n"）→ 写入 PCF85063 芯片 + 系统时钟 + 刷屏
   timeSync.begin(Serial, "CST-8");
   timeSync.onSynced([](time_t ts) {
-    pod::rtcSet(ts);
-    pod::log::event("[rtc] 校时完成（串口 SETTIME → 芯片 + 系统时钟）\n");
+    bool chip = pod::rtcSet(ts);
+    // 区分「校时完成」与「半成」：系统钟总在（文件名正确），芯片写回失败屏幕
+    // 仍走旧时间（v0.2.2 前此失败静默——芯片漂移恒慢正是它的指纹）
+    if (chip) {
+      pod::log::event("[rtc] 校时完成（系统 + 芯片写回 ✓）\n");
+    } else {
+      pod::log::event("[rtc] X 校时半成：系统已设，芯片写回失败（查 I2C/芯片在场）\n");
+    }
     renderPage();
   });
   // 通用串口命令（经 TimeSync 行转发）：LISTEN:1 = 插线保持监听（诊断 VAD 用，
-  // 破「插线即同步暂停、无法边连串口边观测」死锁）；LISTEN:0 = 恢复自动策略
+  // 破「插线即同步暂停、无法边连串口边观测」死锁）；LISTEN:0 = 恢复自动策略；
+  // HELLO = 设备自报家门（App 认设备 → 自动下发 SETTIME 校时）；
+  // TIME? = 回当前 Unix 秒（人工/诊断查漂移）
   timeSync.onLine([](const char *line) {
     if (strcmp(line, "LISTEN:1") == 0) {
       usbListenHold = true;
@@ -314,7 +385,7 @@ void setup() {
       pod::log::event("[usb] LISTEN:1 诊断模式：USB 在线保持监听（插线自动同步已挂起）\n");
     } else if (strcmp(line, "LISTEN:0") == 0) {
       usbListenHold = false;
-      if (Serial.isPlugged() && mode == PodMode::NORMAL) {
+      if (pod::usb::hostOnline() && mode == PodMode::NORMAL) {
         mode = PodMode::SYNC;
         recorder.setPaused(true);
         if (recorder.getState() == WavRecorder::State::RECORDING)
@@ -325,6 +396,29 @@ void setup() {
       } else {
         pod::log::event("[usb] LISTEN:0 恢复插线自动同步策略\n");
       }
+    } else if (strcmp(line, "HELLO") == 0) {
+      // App 设备识别握手：应答后 App 紧跟 SETTIME 下发（插线自动校时）
+      Serial.printf("[pod] HELLO fw=%s hw=%s serial=%s\n", FW_VERSION, HW_ID, podSerial());
+    } else if (strcmp(line, "TIME?") == 0) {
+      time_t now;
+      time(&now);
+      Serial.printf("[pod] TIME %lld\n", (long long)now);
+    } else if (strcmp(line, "RMBEGIN") == 0) {
+      pod::usb::storageSuspend();  // 退盘：清理事务期间固件独占卡（互斥铁律）
+      Serial.println("[pod] RM BEGIN");
+    } else if (strncmp(line, "RM:", 3) == 0) {
+      const char *rel = line + 3;
+      if (!rmPathValid(rel)) {
+        Serial.printf("[pod] RM ERR %s\n", rel);
+      } else {
+        char p[96];
+        snprintf(p, sizeof(p), "%s/%s", SD_ROOT, rel);
+        Serial.printf(remove(p) == 0 ? "[pod] RM OK %s\n" : "[pod] RM ERR %s\n", rel);
+      }
+    } else if (strcmp(line, "RMEND") == 0) {
+      pruneEmptyDayDirs();
+      pod::usb::storageResume();  // 复挂：host 重新挂载即见干净 FAT
+      Serial.println("[pod] RM END");
     }
   });
 
@@ -342,24 +436,29 @@ void setup() {
                                 : "[pod] 就绪：VAD 监听中");
 }
 
-// ---- SYNC 进出（v0.1.0：暂停录音 + 屏显；MSC 同步 v0.2.0）----
+// ---- SYNC 进出（v0.2.0：切段收尾 → 挂只读 U 盘；拔线退盘复录）----
 static void enterSync() {
   mode = PodMode::SYNC;
-  recorder.setPaused(true);  // 正在录则先切段（保留预滚衔接）
+  recorder.setPaused(true);  // 正在录则先切段（保留预滚衔接；切段收尾=FAT 落盘干净）
   if (recorder.getState() == WavRecorder::State::RECORDING) recorder.splitSegment();
+  pod::log::setCardEnabled(false);  // 互斥铁律：U 盘期间固件侧不再写卡（串口照常）
+  bool diskUp = pod::usb::storageAttach();
   battery = pod::batterySample();  // 插拔沿取新鲜样：charging 不再用 ≤60s 旧快照（⚡ 时序 bug）
   pod::setLed(pod::Led::BLINK_500MS);
   renderPage();
-  pod::log::event("[usb] 插入 → 同步态（录音暂停）\n");
+  pod::log::event("[usb] 插入 → 同步态（%s，录音暂停）\n",
+                  diskUp ? "U 盘已挂载，电脑可直接读" : "无卡：U 盘未挂载");
 }
 
 static void exitSync() {
+  pod::usb::storageDetach();        // 先退盘：host 侧卷消失，固件收回 SD 独占权
+  pod::log::setCardEnabled(true);
   mode = PodMode::NORMAL;
   recorder.setPaused(false);
   battery = pod::batterySample();  // 同上：拔线沿新鲜样，防 ⚡ 残留
   pod::setLed(pod::Led::OFF);
   renderPage();
-  pod::log::event("[usb] 拔出 → 恢复监听\n");
+  pod::log::event("[usb] 拔出 → 退盘，恢复监听\n");
 }
 
 // ---- loop ----
@@ -391,8 +490,19 @@ void loop() {
       }
       break;
     case pod::KeyEvent::BOOT_HOLD5S:
-      if (mode == PodMode::ERROR_)
-        pod::log::event("[key] 固件内格式化 v0.2.0 提供；请先用电脑 FAT32 格式化后重新插卡\n");
+      // 固件内格式化（firmware-plan B6）：仅 ERROR 态（SD 挂载失败）可达，
+      // 双重确认 = 屏显异常提示 + 5s 长按；挂载成功路径不存在格式化入口，
+      // 「已有录音拒绝格式化」由构造保证（卡可读则原样挂回、绝不 f_mkfs）
+      if (mode == PodMode::ERROR_) {
+        pod::log::event("[sd] 格式化确认（长按 5s）：卸载重挂，失败则 FAT 重格…\n");
+        if (recorder.rescueMount(true)) {
+          pod::log::event("[sd] 挂载成功（无需格式化则原样保留）→ 重启恢复完整链路\n");
+          Serial.flush();
+          delay(1500);
+          esp_restart();  // 重走开机流：录音链路 + ensureMarker 开卡
+        }
+        pod::log::event("[sd] X 格式化失败（多半无卡）——插卡后长按 BOOT 重试，或用电脑 FAT32 格式化\n");
+      }
       break;
     case pod::KeyEvent::PWR_HOLD3S:
       if (mode != PodMode::SYNC) requestShutdown();  // USB 在线不关机（§5）
@@ -403,6 +513,7 @@ void loop() {
   }
   pod::ledTick();
   pod::log::tick();
+  pod::usb::tick();  // SUSPEND 3s 判离（host 休眠=拔线，退出 SYNC 恢复录音）
 
   // 2. ERROR 态：插回检测提示 + 电池周期采样（录音链路未起）
   if (mode == PodMode::ERROR_) {
@@ -427,7 +538,7 @@ void loop() {
   }
 
   // 3. USB 插拔沿 → SYNC 进出（LISTEN:1 诊断时挂起：插线不进 SYNC；拔线若在 SYNC 才恢复）
-  bool plugged = Serial.isPlugged();  // 实时检测（battery.charging 是 60s 快照）
+  bool plugged = pod::usb::hostOnline();  // 实时检测（battery.charging 是 60s 快照）
   if (plugged != usbWasPlugged) {
     usbWasPlugged = plugged;
     if (plugged) {
@@ -440,10 +551,12 @@ void loop() {
   // 4. 录音步进（SYNC 态 paused 内部丢帧；MUTED 同理）
   recorder.step();
 
-  // 5. SD 热拔探测（10s；录音中跳过——写失败路径已覆盖；连续 2 次失败才判拔卡防误报）
+  // 5. SD 热拔探测（10s；录音中跳过——写失败路径已覆盖；SYNC 态跳过——
+  //    U 盘期间 SD 只归 MSC 读，固件不碰卡；连续 2 次失败才判拔卡防误报）
   static uint32_t lastSdProbe = 0;
   static int sdFailCount = 0;
-  if (recorder.getState() != WavRecorder::State::RECORDING &&
+  if (mode != PodMode::SYNC &&
+      recorder.getState() != WavRecorder::State::RECORDING &&
       millis() - lastSdProbe >= 10000) {
     lastSdProbe = millis();
     if (!sdProbeOk()) {

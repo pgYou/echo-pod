@@ -8,7 +8,7 @@ export default defineConfig({
     build: {
       rollupOptions: {
         // 原生模块不能被 bundle，运行时从 node_modules 加载
-        external: ['sherpa-onnx-node']
+        external: ['sherpa-onnx-node', 'serialport']
       }
     }
   },

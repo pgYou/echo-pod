@@ -7,6 +7,7 @@ import { enqueueTranscribe, requeueForVoiceprint, stopTranscribe } from './trans
 import { getRecordings } from './state'
 import { getDataDir, setDataDir } from './settings'
 import { scanDeviceFiles, scanVolumes } from './devices'
+import { cleanDeviceViaCdc } from './cdc'
 
 export function registerIpc(): void {
   ipcMain.handle('app:get-state', () => snapshot())
@@ -103,32 +104,32 @@ export function registerIpc(): void {
   })
 
   // 清理设备上已同步的录音文件（本地库已有副本的那些；未同步的保留）
-  ipcMain.handle('app:clean-device', (_event, serial: unknown) => {
+  // v0.2.1 起 U 盘只读 → 删除由固件经 CDC 代劳（RMBEGIN→RM×N→RMEND 事务，
+  // device-protocol §6）；空日期目录由固件 RMEND 顺手清
+  ipcMain.handle('app:clean-device', async (_event, serial: unknown) => {
     if (typeof serial !== 'string') throw new Error('invalid serial')
     const device = getDevice(serial)
     if (!device?.connected || !device.volumePath) throw new Error('设备未连接')
 
+    // 固件版本门槛：首版 v0.2.0 无清理命令（同号两代固件，版本号即判据）
+    const fwOk = (fw: string | undefined, min: string): boolean => {
+      if (!fw) return true // 未知不拦（兜底交给握手应答判定）
+      const a = fw.split('.').map(Number)
+      const b = min.split('.').map(Number)
+      for (let i = 0; i < 3; i++) {
+        if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) > (b[i] ?? 0)
+      }
+      return true
+    }
+    if (!fwOk(device.fw, '0.2.1')) {
+      throw new Error(`设备固件 v${device.fw} 过旧（清理需 v0.2.1+），请重烧固件——设备卡下方可见当前版本`)
+    }
+
     const synced = scanDeviceFiles(device.volumePath).filter((f) => findRecording(serial, f.relPath, f.size))
-    for (const f of synced) {
-      try {
-        fs.rmSync(f.absPath, { force: true })
-      } catch (err) {
-        console.warn('[ipc] 清理设备文件失败：', f.relPath, err)
-      }
-    }
-    // 顺手清掉空的日期目录
-    try {
-      const dayRoot = path.join(device.volumePath, 'echo-pod')
-      for (const entry of fs.readdirSync(dayRoot)) {
-        const dir = path.join(dayRoot, entry)
-        if (fs.statSync(dir).isDirectory() && fs.readdirSync(dir).length === 0) {
-          fs.rmdirSync(dir)
-        }
-      }
-    } catch {
-      // 目录不存在或非空，忽略
-    }
+    if (synced.length === 0) return 0
+    const { ok, fail } = await cleanDeviceViaCdc(synced.map((f) => f.relPath))
+    for (const p of fail) console.warn('[ipc] 清理设备文件失败：', p)
     scanVolumes()
-    return synced.length
+    return ok.length
   })
 }

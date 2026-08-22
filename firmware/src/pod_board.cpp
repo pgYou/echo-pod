@@ -1,5 +1,6 @@
 #include "pod_board.h"
 #include "config.h"
+#include "pod_usb.h"
 #include <Wire.h>
 #include <time.h>
 
@@ -74,7 +75,9 @@ Battery batterySample() {
   }
   Battery b;
   b.volts = (mv / 8) * 2.0f / 1000.0f;  // ÷2 分压回乘（原始值，日志用）
-  b.charging = Serial.isPlugged();      // USB 在线 = ETA6098 充电中（红灯亮）
+  b.charging = usb::hostOnline();  // USB 数据在线 = ETA6098 充电中（红灯亮）。
+                                    // v0.2.0 切 TinyUSB：枚举事件判定（原 HWCDC SOF），
+                                    // 语义不变——插电脑即真，插哑充电头即假（无 ⚡，红灯照亮）
   // 显示稳定（v0.1.5）：电压 EMA 平滑 + 放电棘轮——负载压降/ADC 噪声不再直接
   // 透传成 20~30% 跳变。放电时只降不升；充电自由升；跳升 >15% 视为换电/复位容错
   static float emaV = 0;
@@ -218,7 +221,7 @@ bool rtcRead(RtcTime &t) {
   return (sec & 0x80) == 0;            // OS=0 → 晶振持续走时，时间有效
 }
 
-static void rtcWrite(const RtcTime &t) {
+static bool rtcWrite(const RtcTime &t) {
   Wire.beginTransmission(RTC_ADDR);
   Wire.write(0x04);
   Wire.write(bin2bcd(t.s));  // 写入即清 OS 标志
@@ -228,7 +231,7 @@ static void rtcWrite(const RtcTime &t) {
   Wire.write(0x01);          // weekday 随意
   Wire.write(bin2bcd(t.mo));
   Wire.write(bin2bcd(t.y));
-  Wire.endTransmission();
+  return Wire.endTransmission() == 0;  // I2C 失败可见（此前静默，校时回写断了无人知）
 }
 
 static time_t rtcToUnix(const RtcTime &t) {
@@ -265,11 +268,12 @@ static RtcTime compileTime() {
   return {(uint8_t)(year - 2000), moN, (uint8_t)day, (uint8_t)h, (uint8_t)mi, (uint8_t)s};
 }
 
-void rtcSet(time_t unixSec) {
-  // 统一校时入口：系统时钟无条件设（无芯片时也要走时间）；芯片在则同步写回
-  if (unixSec < 1577836800) return;  // <2020-01-01 = 异常值（SETTIME 手误/解析垃圾），拒绝
+bool rtcSet(time_t unixSec) {
+  // 统一校时入口：系统时钟无条件设（无芯片时也要走时间）；芯片在则同步写回。
+  // 返回 = 芯片写回结果（false=无芯片/值异常/I2C 失败；此时系统时钟仍已设置）
+  if (unixSec < 1577836800) return false;  // <2020-01-01 = 异常值（SETTIME 手误/解析垃圾），拒绝
   setSystemTime(unixSec);
-  if (!rtcPresent_) return;
+  if (!rtcPresent_) return false;
   time_t local = unixSec + 8 * 3600;  // 东八区墙钟（UTC + 偏移，gmtime_r 无 TZ 依赖）
   struct tm ti;
   gmtime_r(&local, &ti);
@@ -280,7 +284,7 @@ void rtcSet(time_t unixSec) {
   t.h = ti.tm_hour;
   t.mi = ti.tm_min;
   t.s = ti.tm_sec;
-  rtcWrite(t);
+  return rtcWrite(t);
 }
 
 bool rtcBegin() {
@@ -308,7 +312,15 @@ bool rtcBegin() {
   // 即晶振持续走时）→ 无条件采纳，不做编译时间比较——OS=0 时时间必然连续，
   // 「有效但过期」不存在；失效（无芯片/停振）才编译时间兜底
   RtcTime t;
-  if (rtcRead(t)) {
+  bool ok = rtcRead(t);
+  if (!ok) {  // 瞬态 I2C 毛刺重试一次：此处误判的代价是编译时间覆盖好芯片
+    delay(5);
+    ok = rtcRead(t);
+  }
+  if (ok) {
+    rtcPresent_ = true;  // v0.2.2 修复：此行 v0.1.3 起一直漏写——成功分支不置位，
+                         // rtcSet 的芯片写回被 if(!rtcPresent_) 静默跳过，芯片
+                         // 漂移无人能修（系统钟/文件名正常 → 屏幕直读芯片恒慢）
     setSystemTime(rtcToUnix(t));
     Serial.printf("[自检·时间] ✓ 芯片 20%02d-%02d-%02d %02d:%02d:%02d\n",
                   t.y, t.mo, t.d, t.h, t.mi, t.s);

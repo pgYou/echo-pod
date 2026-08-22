@@ -2,6 +2,7 @@
 #include <Arduino.h>
 #include <ESP_I2S.h>
 #include <cstdio>
+#include "driver/sdmmc_types.h"  // sdmmc_card_t（v0.2.0 MSC 块代理读卡用）
 #include "VadTrigger.h"
 #include "RingBuffer.h"
 
@@ -91,6 +92,12 @@ public:
   bool begin(const HardwareConfig &hw, const VadTrigger::Params &vad);
   void end();
 
+  // 救援挂载（v0.2.0，firmware-plan B6）：begin 挂载失败后的重试入口。
+  // format=true 且挂载失败 → f_mkfs FAT 重格再挂（固件内格式化，ERROR 态
+  // 长按 BOOT 5s 触发）。挂载成功本身不格式化——卡上数据完好则原样挂回。
+  // 成功返回 true（/sdcard 可用，卡句柄同步更新到 sdCard()）
+  bool rescueMount(bool format);
+
   // 主循环步进。在 Arduino loop() 里反复调用，非阻塞。
   void step();
 
@@ -118,6 +125,9 @@ public:
   uint32_t getVadLowMs() const { return vad_.getLowMs(); }
   const VadTrigger::Params &getVadParams() const { return vad_.getParams(); }
   const char *getCurrentPath() const { return currentPath_.c_str(); }
+  // SD 原始卡句柄（SD_MMC 后端挂载成功后有效；USB-MSC 块代理按扇区读卡用，
+  // 调用方保证读取期间本模块不写卡——SYNC 态暂停录音即满足）
+  sdmmc_card_t *sdCard() const { return sdCard_; }
 
 private:
   I2SClass i2s_;
@@ -128,6 +138,7 @@ private:
   bool begun_ = false;
 
   FILE *wavFile_ = nullptr;  // POSIX（存储层与 arduino SD_MMC 库解耦，走 IDF VFS）
+  sdmmc_card_t *sdCard_ = nullptr;  // IDF 挂载返回的卡句柄（MSC 块代理共用）
   uint32_t dataBytes_ = 0; // 当前文件已写 PCM 字节
   uint32_t recordMs_ = 0;  // 当前已录时长（ms）
   String currentPath_;

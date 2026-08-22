@@ -41,6 +41,7 @@ U盘根目录/
 |--------|------|
 | M1 脚手架 + 主窗口 + 设备/录音 UI | ✅ |
 | M2 设备检测 + 同步 | ✅ | 2s 轮询 `/Volumes`（无 watcher，不阻碍磁盘推出）+ `.echo-pod` 认亲 + 竞态防护：.part 临时文件 + rename |
+| CDC 自动校时 | ✅ v0.2.0 | 设备插入沿扫 VID 0x303a 串口 → `HELLO` 握手（device-protocol §6）→ 无条件下发 `SETTIME`（serialport，失败静默） |
 | M0/M4 ASR | ✅ **SenseVoice Small int8 真转写已接入**（sherpa-onnx-node，`say` 合成语音实测正确，2.8s 音频解码 61ms） |
 | M3 归档 + 检索 | ✅ 文件名 + 转写全文搜索（JSON store；SQLite/FTS5 如需再升级） |
 | M5 声纹分轨 | ✅ pyannote 分割 + 3dspeaker eres2net embedding + 聚类；官方 4 说话人测试音频分轨正确，输出 "[说话人 N] 文本" 格式 |

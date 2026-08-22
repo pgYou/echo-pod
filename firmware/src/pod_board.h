@@ -46,8 +46,10 @@ struct RtcTime {
 // （有芯片则写回重新走时），返回 false 待插线校准
 bool rtcBegin();
 bool rtcRead(RtcTime &t);
-// 统一校时入口：settimeofday + 写 RTC 芯片一次完成（无芯片则只设系统时钟）。
-// 之后全固件 time()/localtime_r（录音文件名/日志时间戳）自动跟随；屏幕直读芯片
-void rtcSet(time_t unixSec);
+// 统一校时入口：settimeofday + 写 RTC 芯片一次完成。
+// 之后全固件 time()/localtime_r（录音文件名/日志时间戳）自动跟随；屏幕直读芯片。
+// 返回 = 芯片写回结果：false（无芯片/值异常/I2C 失败）时系统时钟仍已设置——
+// 调用方留痕区分「校时完成」与「半成」（v0.2.2：回写静默失败曾潜伏四版）
+bool rtcSet(time_t unixSec);
 
 }  // namespace pod
