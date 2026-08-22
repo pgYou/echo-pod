@@ -55,6 +55,36 @@ export interface TranscribeJob {
 /** 录音列表视图：按条（逐条列表）| 按天（一天一行，侧边栏整读当日对话） */
 export type ViewMode = 'items' | 'days'
 
+/** LLM 接口设置（OpenAI 兼容 chat/completions，用于 AI 日总结） */
+export interface LlmSettings {
+  /** API 地址（Base URL），如 https://api.openai.com/v1；以 /chat/completions 结尾亦可 */
+  baseUrl: string
+  model: string
+  apiKey: string
+}
+
+/** 一天的 AI 总结（主进程调 LLM 生成，随库持久化） */
+export interface DaySummary {
+  serial: string
+  /** 天键，如 2026-08-22（与录音分组同源） */
+  day: string
+  /** 按时间线的总结文本 */
+  summary: string
+  /** 参与本次总结的录音 id（重转写/新增文稿后可据此判断过期） */
+  recordingIds: string[]
+  /** 生成所用模型（溯源） */
+  model: string
+  createdAt: string
+}
+
+/** 进行中的 AI 日总结流（SSE 增量实时推送；null = 无进行中的总结） */
+export interface SummaryStream {
+  serial: string
+  day: string
+  /** 已生成的部分文本 */
+  text: string
+}
+
 /** 声纹（设备内自动注册的声音身份）。同名允许重复 = 多个声纹是同一人（识别拆分） */
 export interface Voiceprint {
   id: string
@@ -80,4 +110,8 @@ export interface AppState {
   sync: SyncState | null
   /** 转写队列快照（无任务时为 null） */
   transcribe: TranscribeJob | null
+  /** AI 日总结（键 `${serial}/${day}`） */
+  summaries: Record<string, DaySummary>
+  /** LLM 接口是否已配置齐全（未配置时置灰 AI 总结入口） */
+  llmConfigured: boolean
 }

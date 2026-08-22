@@ -2,8 +2,8 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { app, BrowserWindow } from 'electron'
-import type { AppState, DeviceInfo, RecordingMeta, SyncState, TranscribeJob, Voiceprint } from '../shared/types'
-import { getDataDir } from './settings'
+import type { AppState, DaySummary, DeviceInfo, RecordingMeta, SummaryStream, SyncState, TranscribeJob, Voiceprint } from '../shared/types'
+import { getDataDir, isLlmConfigured } from './settings'
 
 interface LibraryFile {
   devices: Record<string, DeviceInfo>
@@ -12,6 +12,8 @@ interface LibraryFile {
   voiceprints?: Record<string, Voiceprint[]>
   /** 转写档案：音频文件被清理后保留的转写结果（id = serial+relPath+size），重同步同文件时恢复 */
   archive?: Record<string, RecordingMeta['transcribe']>
+  /** AI 日总结（键 `${serial}/${day}`） */
+  summaries?: Record<string, DaySummary>
 }
 
 const ARCHIVE_CAP = 500
@@ -29,6 +31,13 @@ export function loadLibrary(): void {
     state.recordings = parsed.recordings ?? {}
     state.voiceprints = parsed.voiceprints ?? {}
     state.archive = parsed.archive ?? {}
+    state.summaries = parsed.summaries ?? {}
+    // 历史遗留清理：曾内置演示设备（ES3-DEMO01）及其录音/总结，播种逻辑移除后把旧库里的也清掉
+    delete state.devices['ES3-DEMO01']
+    delete state.recordings['ES3-DEMO01']
+    for (const k of Object.keys(state.summaries ?? {})) {
+      if (k.startsWith('ES3-DEMO01/')) delete state.summaries![k]
+    }
     // 启动时所有设备离线
     for (const d of Object.values(state.devices)) {
       d.connected = false
@@ -129,7 +138,20 @@ export function snapshot(): AppState {
     recordings: state.recordings,
     voiceprints: state.voiceprints ?? {},
     sync: currentSync,
-    transcribe: currentTranscribe
+    transcribe: currentTranscribe,
+    summaries: state.summaries ?? {},
+    llmConfigured: isLlmConfigured()
+  }
+}
+
+/**
+ * 总结流增量走专用轻量通道，不进 AppState：
+ * 全量快照含所有录音全文 + 声纹向量，流式期间若每次 delta 都 emitState，
+ * 结构克隆 + JSON 序列化的分配速率会撑爆主进程堆（实测 OOM）。
+ */
+export function broadcastSummaryDelta(s: SummaryStream | null): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    win.webContents.send('summary-delta', s)
   }
 }
 
@@ -193,6 +215,15 @@ export function recordingsRoot(): string {
   return getDataDir()
 }
 
+
+// ---------------------------------------------------------------- AI 日总结
+
+/** 保存（覆盖）一天的 AI 总结 */
+export function saveDaySummary(s: DaySummary): void {
+  state.summaries ??= {}
+  state.summaries[`${s.serial}/${s.day}`] = s
+  emitState()
+}
 
 // ---------------------------------------------------------------- 声纹库（按设备隔离）
 

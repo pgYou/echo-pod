@@ -1,13 +1,15 @@
 import { dialog, ipcMain } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
-import { snapshot, removeRecordings, recordingsRoot, findRecording, getDevice, renameVoiceprint, deleteVoiceprint, voiceprintsRoot } from './state'
+import { snapshot, removeRecordings, recordingsRoot, findRecording, getDevice, renameVoiceprint, deleteVoiceprint, voiceprintsRoot, emitState } from './state'
 import { syncDevice } from './sync'
 import { enqueueTranscribe, requeueForVoiceprint, stopTranscribe } from './transcribe'
 import { getRecordings } from './state'
-import { getDataDir, setDataDir } from './settings'
+import { getDataDir, setDataDir, getLlmSettings, setLlmSettings } from './settings'
 import { scanDeviceFiles, scanVolumes } from './devices'
 import { cleanDeviceViaCdc } from './cdc'
+import { summarizeDay } from './llm'
+import type { LlmSettings } from '../shared/types'
 
 export function registerIpc(): void {
   ipcMain.handle('app:get-state', () => snapshot())
@@ -19,7 +21,25 @@ export function registerIpc(): void {
 
   // ---- 设置 ----
 
-  ipcMain.handle('app:get-settings', () => ({ dataDir: getDataDir() }))
+  ipcMain.handle('app:get-settings', () => ({ dataDir: getDataDir(), llm: getLlmSettings() }))
+
+  // LLM 接口设置（AI 日总结用）
+  ipcMain.handle('app:set-llm-settings', (_event, llm: unknown) => {
+    const v = llm as Partial<LlmSettings>
+    if (typeof v?.baseUrl !== 'string' || typeof v?.model !== 'string' || typeof v?.apiKey !== 'string') {
+      throw new Error('invalid args')
+    }
+    const applied = setLlmSettings({ baseUrl: v.baseUrl, model: v.model, apiKey: v.apiKey })
+    // 立即广播：快照里的 llmConfigured 变化驱动总结按钮解禁，不等下一次状态变更
+    emitState()
+    return applied
+  })
+
+  // 生成（或重新生成）某天的 AI 总结
+  ipcMain.handle('app:summarize-day', (_event, serial: unknown, day: unknown) => {
+    if (typeof serial !== 'string' || typeof day !== 'string') throw new Error('invalid args')
+    return summarizeDay(serial, day)
+  })
 
   ipcMain.handle('app:pick-data-dir', async () => {
     const result = await dialog.showOpenDialog({

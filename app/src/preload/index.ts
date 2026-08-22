@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { AppState } from '../shared/types'
+import type { AppState, DaySummary, LlmSettings, SummaryStream } from '../shared/types'
 
 const api = {
   getState: (): Promise<AppState> => ipcRenderer.invoke('app:get-state'),
@@ -10,9 +10,14 @@ const api = {
     return () => ipcRenderer.removeListener('app-state', listener)
   },
   // 设置
-  getSettings: (): Promise<{ dataDir: string }> => ipcRenderer.invoke('app:get-settings'),
+  getSettings: (): Promise<{ dataDir: string; llm: LlmSettings }> => ipcRenderer.invoke('app:get-settings'),
   pickDataDir: (): Promise<string | null> => ipcRenderer.invoke('app:pick-data-dir'),
   setDataDir: (dir: string): Promise<string> => ipcRenderer.invoke('app:set-data-dir', dir),
+  setLlmSettings: (llm: LlmSettings): Promise<LlmSettings> =>
+    ipcRenderer.invoke('app:set-llm-settings', llm),
+  // AI 日总结
+  summarizeDay: (serial: string, day: string): Promise<DaySummary> =>
+    ipcRenderer.invoke('app:summarize-day', serial, day),
   // 数据删除
   deleteRecordings: (serial: string, ids: string[]): Promise<number> =>
     ipcRenderer.invoke('app:delete-recordings', serial, ids),
@@ -29,6 +34,12 @@ const api = {
     ipcRenderer.invoke('app:transcribe-one', serial, id),
   transcribeSelected: (serial: string, ids: string[]): Promise<number> =>
     ipcRenderer.invoke('app:transcribe-selected', serial, ids),
+  /** AI 总结流式增量（生成中节流推送；null = 结束/失败）。专用轻量通道，不随全量快照 */
+  onSummaryDelta: (callback: (s: SummaryStream | null) => void): (() => void) => {
+    const listener = (_e: Electron.IpcRendererEvent, s: Parameters<typeof callback>[0]): void => callback(s)
+    ipcRenderer.on('summary-delta', listener)
+    return () => ipcRenderer.removeListener('summary-delta', listener)
+  },
   /** 大同步量预览：同步完成后主进程推送，渲染层弹选择框 */
   onSyncBatchPreview: (
     callback: (batch: { serial: string; items: { id: string; fileName: string; day: string; durationSec?: number; size: number }[]; estimatedSec: number }) => void

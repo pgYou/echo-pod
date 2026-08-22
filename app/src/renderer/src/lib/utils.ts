@@ -27,13 +27,5 @@ export function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString("zh-CN")
 }
 
-/**
- * 有效文稿判定：去掉说话人标签（[名字]/[说话人 N]，标签是元数据不算内容）后，
- * 标点空白不算，实质字符（汉字/字母/数字）需 ≥2 个。
- * 噪音/空白录音的空转写常是零散标点（"· 。"）或单个字母（"I."）——只判"有无"挡不住，需数个数。
- */
-export function hasMeaningfulText(text?: string | null): boolean {
-  if (!text) return false
-  const chars = text.replace(/\[[^\]]*\]/g, ' ').match(/[\p{L}\p{N}]/gu)
-  return chars != null && chars.length >= 2
-}
+// 有效文稿判定下沉 shared（主进程 AI 总结同样要用），此处转出口保持 @/lib/utils 引用不变
+export { hasMeaningfulText } from '../../../shared/text'

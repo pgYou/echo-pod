@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { toast, Toaster } from 'sonner'
-import type { AppState, ViewMode } from '../../shared/types'
+import type { AppState, SummaryStream, ViewMode } from '../../shared/types'
 import DayDetail from './components/DayDetail'
 import DevicePanel from './components/DevicePanel'
 import RecordingDetail from './components/RecordingDetail'
@@ -19,6 +19,8 @@ export default function App(): React.JSX.Element {
   const [scrollTopSignal, setScrollTopSignal] = useState(0)
   // 大同步量转写预览
   const [syncBatch, setSyncBatch] = useState<SyncBatchPreview | null>(null)
+  // AI 总结流式增量（专用通道实时推送；null = 无进行中的总结）
+  const [summaryStream, setSummaryStream] = useState<SummaryStream | null>(null)
 
   useEffect(() => {
     void window.api.getState().then((s) => {
@@ -32,6 +34,11 @@ export default function App(): React.JSX.Element {
     // 主/渲染版本错位（preload 未随重启）时优雅跳过
     if (typeof window.api.onSyncBatchPreview !== 'function') return
     return window.api.onSyncBatchPreview(setSyncBatch)
+  }, [])
+
+  useEffect(() => {
+    if (typeof window.api.onSummaryDelta !== 'function') return
+    return window.api.onSummaryDelta(setSummaryStream)
   }, [])
 
   // 选中设备被移除时回落到第一个（state 未加载时为 null；所有 hook 必须在下方早退之前）
@@ -69,6 +76,12 @@ export default function App(): React.JSX.Element {
         )
       : []
 
+  // 选中日的 AI 总结（主进程生成后随状态推送）
+  const daySummary =
+    effectiveSerial && selectedDay
+      ? (state.summaries?.[`${effectiveSerial}/${selectedDay}`] ?? null)
+      : null
+
   return (
     <div className="flex h-full flex-col bg-page-glow">
       <TitleBar
@@ -103,11 +116,14 @@ export default function App(): React.JSX.Element {
           )}
         </main>
 
-        {/* 右侧详情栏：常驻挂载，宽度 0↔34rem 缓动展开/收起。按条视图 = 单条详情；按天视图 = 当日对话文稿 */}
+        {/* 右侧详情栏：常驻挂载，宽度 0↔34rem 缓动展开/收起。按条视图 = 单条详情；按天视图 = 当日对话文稿 + AI 总结 */}
         {viewMode === 'days' ? (
           <DayDetail
             day={selectedDay}
             recordings={dayRecordings}
+            summary={daySummary}
+            summaryStream={summaryStream}
+            llmConfigured={state.llmConfigured ?? false}
             open={selectedDay != null}
             onClose={() => setSelectedDay(null)}
           />

@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { CalendarDays, Pause, Play, RefreshCcw, Trash2, X } from 'lucide-react'
-import type { RecordingMeta } from '../../../shared/types'
+import { CalendarDays, Loader2, MessageSquare, Pause, Play, RefreshCcw, Sparkles, Trash2, X } from 'lucide-react'
+import type { DaySummary, RecordingMeta, SummaryStream } from '../../../shared/types'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import { cn, formatDuration, hasMeaningfulText } from '@/lib/utils'
+import { cn, formatDateTime, formatDuration, hasMeaningfulText } from '@/lib/utils'
 
 /** 有效文稿：已转写完成且有实质文本（去标点/标签后仍有汉字字母数字——噪音录音常转出零散标点） */
 function hasText(r: RecordingMeta): boolean {
@@ -203,16 +203,26 @@ interface Props {
   day: string | null
   /** 该设备当天的全部录音（含无文稿的，用于统计） */
   recordings: RecordingMeta[]
+  /** 当天的 AI 总结（主进程生成后随状态推送） */
+  summary?: DaySummary | null
+  /** 进行中的总结流（全局单任务；匹配当天时在总结 tab 实时渲染） */
+  summaryStream: SummaryStream | null
+  /** LLM 是否已配置（未配置时置灰总结入口，提示先去设置） */
+  llmConfigured: boolean
   open: boolean
   onClose: () => void
 }
 
-/** 按天视图侧边栏：一天的对话文稿连续展示（过滤无有效文本的录音），每块右上角微型播放器 */
-export default function DayDetail({ day, recordings, open, onClose }: Props): React.JSX.Element {
-  const lastRef = useRef<{ day: string; recordings: RecordingMeta[] } | null>(null)
-  if (day) lastRef.current = { day, recordings }
+/** 按天视图侧边栏：双 tab —— 对话文稿连续展示（过滤无有效文本的录音）+ AI 按时间线总结 */
+export default function DayDetail({ day, recordings, summary, summaryStream, llmConfigured, open, onClose }: Props): React.JSX.Element {
+  const lastRef = useRef<{ day: string; recordings: RecordingMeta[]; summary?: DaySummary | null } | null>(null)
+  if (day) lastRef.current = { day, recordings, summary }
   const curDay = day ?? lastRef.current?.day ?? null
   const recs = day ? recordings : (lastRef.current?.recordings ?? [])
+  const curSummary = day ? summary : lastRef.current?.summary
+
+  // 内容 tab：对话 / AI 总结
+  const [tab, setTab] = useState<'chat' | 'summary'>('chat')
 
   // 单实例播放：新起一个时暂停上一个
   const activeAudioRef = useRef<HTMLAudioElement | null>(null)
@@ -224,6 +234,30 @@ export default function DayDetail({ day, recordings, open, onClose }: Props): Re
   if (!curDay) return <></>
 
   const valid = [...recs].filter(hasText).sort((a, b) => timeKey(a).localeCompare(timeKey(b)))
+  // 流式状态在主进程全局单槽（不随本组件卸载丢失）：匹配当天 → 实时渲染；不匹配 → 只是全局占用（按钮置灰）
+  const stream =
+    summaryStream != null && recs[0]?.serial === summaryStream.serial && curDay === summaryStream.day
+      ? summaryStream
+      : null
+  const busy = summaryStream != null
+  // 渲染层热更新后 preload 未随重启（开发态常见）：新 API 尚未注入，直接调用会抛 not a function
+  const apiMissing = typeof window.api.summarizeDay !== 'function'
+  const disabledReason = busy
+    ? '正在总结中，请稍候'
+    : apiMissing
+      ? '应用版本错位，请重启应用'
+      : llmConfigured
+        ? undefined
+        : '请先在「设置」中配置 LLM 接口'
+
+  const runSummarize = (): void => {
+    const serial = recs[0]?.serial
+    if (!serial || !curDay || disabledReason) return
+    window.api
+      .summarizeDay(serial, curDay)
+      .then(() => toast.success('AI 总结已生成'))
+      .catch((err: unknown) => toast.error(err instanceof Error ? err.message : String(err)))
+  }
 
   return (
     <aside
@@ -249,24 +283,107 @@ export default function DayDetail({ day, recordings, open, onClose }: Props): Re
               {recs.length} 条录音{valid.length < recs.length ? ` · ${valid.length} 条有文稿` : ''}
             </p>
           </div>
-          <button
-            onClick={onClose}
-            className="shrink-0 cursor-pointer rounded-md p-1 text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground"
-            aria-label="关闭详情"
-          >
-            <X className="size-4" />
-          </button>
+          {/* 右侧：内容 tab 切换（对话 / AI 总结）+ 关闭 */}
+          <div className="flex shrink-0 items-center gap-1.5">
+            <div className="flex items-center rounded-md border p-0.5">
+              <button
+                onClick={() => setTab('chat')}
+                className={cn(
+                  'flex cursor-pointer items-center gap-1 rounded-[5px] px-1.5 py-0.5 text-xs outline-none transition-colors',
+                  tab === 'chat' ? 'bg-accent text-accent-foreground' : 'text-muted-foreground hover:text-foreground'
+                )}
+                aria-label="对话文稿"
+              >
+                <MessageSquare className="size-3" />
+                对话
+              </button>
+              <button
+                onClick={() => setTab('summary')}
+                className={cn(
+                  'flex cursor-pointer items-center gap-1 rounded-[5px] px-1.5 py-0.5 text-xs outline-none transition-colors',
+                  tab === 'summary' ? 'bg-accent text-accent-foreground' : 'text-muted-foreground hover:text-foreground'
+                )}
+                aria-label="AI 总结"
+              >
+                <Sparkles className="size-3" />
+                AI 总结
+              </button>
+            </div>
+            <button
+              onClick={onClose}
+              className="cursor-pointer rounded-md p-1 text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground"
+              aria-label="关闭详情"
+            >
+              <X className="size-4" />
+            </button>
+          </div>
         </header>
 
-        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-5">
-          {valid.length === 0 ? (
-            <div className="rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground">
-              这一天还没有有效文稿（转写完成且有文本的录音会显示在这里）
-            </div>
+        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5">
+          {tab === 'summary' ? (
+            valid.length === 0 ? (
+              <div className="rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground">
+                这一天还没有可总结的文稿（转写完成且有文本的录音才能生成总结）
+              </div>
+            ) : stream ? (
+              <div className="space-y-3">
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <Loader2 className="size-3.5 animate-spin" />
+                  AI 总结中，实时生成…
+                </div>
+                <p className="whitespace-pre-wrap text-sm leading-relaxed">{stream.text}</p>
+              </div>
+            ) : curSummary ? (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="min-w-0 truncate text-xs text-muted-foreground">
+                    {curSummary.model} · 生成于 {formatDateTime(curSummary.createdAt)}
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 shrink-0 px-2.5 text-xs"
+                    disabled={disabledReason != null}
+                    title={disabledReason}
+                    onClick={runSummarize}
+                  >
+                    <RefreshCcw className="size-3" />
+                    重新总结
+                  </Button>
+                </div>
+                <p className="whitespace-pre-wrap text-sm leading-relaxed">{curSummary.summary}</p>
+              </div>
+            ) : (
+              <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed p-10 text-center">
+                <Sparkles className="size-5 text-muted-foreground" />
+                <p className="text-sm text-muted-foreground">用 LLM 按时间线总结这一天的对话</p>
+                <Button size="sm" disabled={disabledReason != null} title={disabledReason} onClick={runSummarize}>
+                  <Sparkles className="size-3.5" />
+                  生成 AI 总结
+                </Button>
+                <p className="text-xs text-muted-foreground">
+                  {apiMissing
+                    ? '应用版本错位，请重启应用后再试'
+                    : busy
+                      ? '有另一个总结正在进行，完成后即可生成'
+                      : llmConfigured
+                        ? '总结基于当日已转写文稿，重新转写后可再次生成'
+                        : '请先在「设置」中配置 LLM 接口'}
+                </p>
+              </div>
+            )
           ) : (
-            valid.map((rec) => (
-              <RecordingBlock key={rec.id} rec={rec} onPlayStart={handlePlayStart} />
-            ))
+            <div className="space-y-4">
+              {valid.length === 0 ? (
+                <div className="rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground">
+                  这一天还没有有效文稿（转写完成且有文本的录音会显示在这里）
+                </div>
+              ) : (
+                valid.map((rec) => (
+                  <RecordingBlock key={rec.id} rec={rec} onPlayStart={handlePlayStart} />
+                ))
+              )}
+            </div>
           )}
         </div>
       </div>

@@ -4,7 +4,6 @@ import path from 'node:path'
 import { registerIpc } from './ipc'
 import { startDeviceWatch } from './devices'
 import { loadLibrary } from './state'
-import { seedDemoIfNeeded } from './demo'
 import { isE2E, runE2E } from './e2e'
 import { handlePodProtocol, registerPodScheme } from './media'
 import { loadSettings } from './settings'
@@ -65,7 +64,6 @@ function createWindow(): void {
 app.whenReady().then(() => {
   loadSettings()
   loadLibrary()
-  seedDemoIfNeeded()
   registerIpc()
   handlePodProtocol()
   startDeviceWatch()
