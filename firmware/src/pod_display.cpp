@@ -1,4 +1,5 @@
 #include "pod_display.h"
+#include "config.h"  // FW_VERSION（底栏版本号）
 #include "EPD_1in54.h"
 #include "Painter.h"
 
@@ -28,17 +29,14 @@ void showPage(Page p, const PageInfo &info) {
   using E = EPD_1in54;
   paint.clear();
 
-  // ---- 顶栏（0..29，垂直中线 15；录音/低电/错误实心点，其余空心）。关机页无顶栏 ----
-  static const char *kName[] = {"待机", "录音", "已暂停", "同步", "低电", "存储"};
+  // ---- 顶栏（左：RTC 时钟（分钟沿走字）；右：电池常显。状态不再重复——
+  //      页面主体已有大字状态。关机页无顶栏）----
   if (p != Page::SHUTDOWN) {
-    bool filled = (p == Page::RECORDING || p == Page::LOWBAT || p == Page::ERROR_);
-    paint.fillCircle(12, 15, 6, E::BLACK);
-    if (!filled) paint.fillCircle(12, 15, 4, E::WHITE);
-    paint.drawText(24, 5, kName[(int)p], E::BLACK);
+    paint.drawText(8, 5, info.clock, E::BLACK);
     drawBattery(136, 8, info);
-    char pct[8];
-    snprintf(pct, sizeof(pct), "%d%%", info.batteryPct);
-    paint.drawText(172, 5, pct, E::BLACK);
+    char pct[5];
+    snprintf(pct, sizeof(pct), "%d", info.batteryPct);  // 纯数字，不带 %
+    paint.drawText(200 - 8 - paint.textWidth(pct), 5, pct, E::BLACK);  // 右对齐（位数变化不跳）
     paint.hline(0, 199, 30, E::BLACK);
   }
 
@@ -109,10 +107,10 @@ void showPage(Page p, const PageInfo &info) {
     }
   }
 
-  // ---- 底栏（RTC 时间 + 今日条数；关机页无）----
+  // ---- 底栏（左：固件版本——烧没烧对一眼可见；右：今日条数。关机页无）----
   if (p != Page::SHUTDOWN) {
     paint.hline(0, 199, 170, E::BLACK);
-    paint.drawText(8, 175, info.clock, E::BLACK);
+    paint.drawText(8, 175, "v" FW_VERSION, E::BLACK);
     char cnt[24];
     snprintf(cnt, sizeof(cnt), "今日%d条", info.todayCount);
     paint.drawText(200 - 8 - paint.textWidth(cnt), 174, cnt, E::BLACK);

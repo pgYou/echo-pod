@@ -59,9 +59,9 @@ firmware/
 ## 烧录
 
 ```bash
-pio run -e echo-pod -t upload --upload-port /dev/cu.usbmodem101   # 正式版（插电脑→U盘+串口）
-pio run -e echo-pod-debug -t upload --upload-port /dev/cu.usbmodem101   # 调试版（插线只供电+串口，录音不中断）
-pio device monitor -p /dev/cu.usbmodem101
+pio run -e echo-pod -t upload          # 正式版（插电脑→U盘+串口）；不指定口让 pio 自动认
+pio run -e echo-pod-debug -t upload    # 调试版（插线只供电+串口，录音不中断）
+pio device monitor                      # 同上自动认口
 # 串口命令（两个 env 通用；协议见 device-protocol.md §6）：
 HELLO               # 设备应答 fw/hw/serial（App 认设备 + 触发自动校时）
 TIME?               # 回当前 Unix 秒（漂移诊断）
@@ -73,7 +73,9 @@ LISTEN:1            # 正式版诊断用：挂起自动同步，插线保持监�
 LISTEN:0            # 恢复插线自动同步策略
 ```
 
-> **v0.2.0 切 TinyUSB 栈后烧录首验注意**：CDC 从硬件外设换成软件栈，esptool/monitor 需重验一次（TinyUSB CDC 支持 DTR/RTS 复位进下载模式）；万一进不去 bootloader，**按住 BOOT 键插线**走 ROM 下载模式。编译时「ARDUINO_USB_MODE redefined」警告属预期（=0 生效）。
+> **端口名速查（TinyUSB 切栈后两种形态，别写死）**：运行态 = 长后缀 `/dev/cu.usbmodemAC276ED…`（固件 TinyUSB CDC，VID 0x2886 板型写死）；ROM 下载模式 = 短名 `/dev/cu.usbmodem101` 这类（VID 0x303a）。`ls /dev/cu.usbmodem*` 看哪个在用哪个，**两个口都能烧**。烧录后 monitor 要回到长后缀口。
+>
+> **v0.2.0 切 TinyUSB 栈后烧录注意**：esptool 经 TinyUSB CDC 复位进下载模式已实测可行；万一复位失败（sync 不上），**按住 BOOT 键插线**即出现短名 ROM 口，对它烧。
 >
 > **烧录后 I2C 总线卡死**（串口见 `SDA=0 SCL=0` / `[自检·时间] ⚠ 无芯片` / 器件探测全失败）：esptool 复位不会给外部芯片断电，总线事务半空时会被从机咬死。**长按 PWR 真断电再开机即恢复，无需重烧**（RTC 电池直供，时间不丢）。软复位无效。
 
